@@ -124,15 +124,15 @@ def ensure_musetalk_deps() -> None:
 
 
 def _install_mmcv_prebuilt() -> None:
-    """Install mmcv using pre-built wheels from OpenMMLab's index.
+    """Install mmcv using pre-built wheels or without custom CUDA ops.
 
-    Auto-detects PyTorch and CUDA versions to find the right wheel.
-    Falls back to source build if no pre-built wheel is available.
+    Tries in order:
+    1. Pre-built wheel from OpenMMLab's index (fastest)
+    2. Source build WITHOUT custom CUDA ops (MMCV_WITH_OPS=0)
     """
     import torch
 
     torch_version = torch.__version__.split("+")[0]  # e.g. "2.9.0"
-    # Shorten to major.minor for the wheel index URL
     tv_parts = torch_version.split(".")
     torch_short = f"{tv_parts[0]}.{tv_parts[1]}.0"  # e.g. "2.9.0"
 
@@ -146,7 +146,7 @@ def _install_mmcv_prebuilt() -> None:
         f"https://download.openmmlab.com/mmcv/dist/{cu_tag}/torch{torch_short}/index.html"
     )
 
-    logger.info("Installing mmcv from pre-built wheel (%s, torch %s)...", cu_tag, torch_short)
+    logger.info("Trying pre-built mmcv wheel (%s, torch %s)...", cu_tag, torch_short)
 
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "-q",
@@ -158,15 +158,18 @@ def _install_mmcv_prebuilt() -> None:
         logger.info("mmcv installed from pre-built wheel")
         return
 
-    # If no pre-built wheel, try without --find-links (source build)
-    logger.warning(
-        "No pre-built mmcv wheel found for %s/torch%s, falling back to pip install "
-        "(this may take 10+ minutes to compile)...",
+    # No pre-built wheel — install without custom CUDA ops (fast, ~1 min)
+    logger.info(
+        "No pre-built mmcv wheel for %s/torch%s. "
+        "Installing mmcv without custom CUDA ops (MMCV_WITH_OPS=0)...",
         cu_tag, torch_short,
     )
+    env = os.environ.copy()
+    env["MMCV_WITH_OPS"] = "0"
     subprocess.run(
         [sys.executable, "-m", "pip", "install", "-q", "mmcv>=2.0.0"],
         check=True,
+        env=env,
     )
 
 
