@@ -49,16 +49,30 @@ def ensure_musetalk_repo() -> Path:
 
 
 def ensure_musetalk_deps() -> None:
-    """Install MuseTalk Python dependencies."""
-    musetalk_dir = get_musetalk_dir()
-    req_file = musetalk_dir / "requirements.txt"
-    if not req_file.exists():
-        logger.warning("requirements.txt not found in MuseTalk repo")
-        return
+    """Install MuseTalk Python dependencies needed for inference.
 
-    logger.info("Installing MuseTalk dependencies...")
+    We install selectively instead of using MuseTalk's requirements.txt,
+    which pins incompatible versions (tensorflow==2.12, numpy==1.23.5)
+    that don't work on Python 3.12+.
+    """
+    # Only the packages MuseTalk needs for inference (not training/UI)
+    inference_deps = [
+        "diffusers",
+        "accelerate",
+        "transformers",
+        "opencv-python",
+        "librosa",
+        "soundfile",
+        "einops",
+        "omegaconf",
+        "ffmpeg-python",
+        "moviepy",
+        "imageio[ffmpeg]",
+    ]
+
+    logger.info("Installing MuseTalk inference dependencies...")
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q", "-r", str(req_file)],
+        [sys.executable, "-m", "pip", "install", "-q"] + inference_deps,
         check=True,
     )
 
