@@ -5,12 +5,25 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import torch
+
 from animated_talker.input_handler import detect_face, load_audio, load_image
 from animated_talker.model_manager import ensure_models, get_model_dir
 from animated_talker.musetalk_engine import MuseTalkEngine
 from animated_talker.video_encoder import encode_video
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_device(device: str) -> str:
+    """Resolve 'auto' device to cuda/mps/cpu based on availability."""
+    if device != "auto":
+        return device
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
 def generate(
@@ -25,7 +38,7 @@ def generate(
     restore_fidelity: float = 0.7,
     batch_size: int = 8,
     use_float16: bool = True,
-    device: str = "cuda",
+    device: str = "auto",
     model_dir: str | Path | None = None,
     crf: int = 18,
 ) -> Path:
@@ -45,8 +58,8 @@ def generate(
         upscale_factor: Upscale multiplier (default 4)
         restore_fidelity: CodeFormer fidelity weight 0.0-1.0 (default 0.7)
         batch_size: Frames per inference batch (default 8)
-        use_float16: Use FP16 for inference (default True, saves VRAM)
-        device: PyTorch device (default "cuda")
+        use_float16: Use FP16 for inference (default True, saves VRAM, auto-disabled on CPU)
+        device: PyTorch device — "auto" (default), "cuda", "mps", or "cpu"
         model_dir: Custom model directory (default ~/.cache/animated_talker/models)
         crf: Video quality 0-51 (default 18, visually lossless)
 
@@ -57,6 +70,15 @@ def generate(
         >>> from animated_talker import generate
         >>> generate(image="avatar.png", audio="speech.mp3", output="result.mp4")
     """
+    device = _resolve_device(device)
+
+    # FP16 not supported on CPU
+    if device == "cpu" and use_float16:
+        logger.info("FP16 not supported on CPU, falling back to FP32")
+        use_float16 = False
+
+    logger.info("Using device: %s (float16=%s)", device, use_float16)
+
     output = Path(output)
     model_path = Path(model_dir) if model_dir else get_model_dir()
 
