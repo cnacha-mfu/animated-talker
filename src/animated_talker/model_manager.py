@@ -76,17 +76,20 @@ def ensure_musetalk_deps() -> None:
         check=True,
     )
 
-    # Install mmlab packages (required for DWPose landmark detection)
-    logger.info("Installing mmlab packages...")
+    # Install mmlab packages via pip (required for DWPose landmark detection).
+    # We avoid openmim which breaks setuptools/pkg_resources on Python 3.12.
+    # Use mmcv-lite (no custom CUDA ops) which installs cleanly via pip.
+    logger.info("Installing mmlab packages (mmengine, mmcv, mmdet, mmpose)...")
+    mmlab_deps = [
+        "mmengine",
+        "mmcv>=2.0.0",
+        "mmdet>=3.1.0",
+        "mmpose>=1.1.0",
+    ]
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir", "-U", "openmim"],
+        [sys.executable, "-m", "pip", "install", "-q"] + mmlab_deps,
         check=True,
     )
-    for pkg in ["mmengine", "mmcv==2.0.1", "mmdet==3.1.0", "mmpose==1.1.0"]:
-        subprocess.run(
-            [sys.executable, "-m", "mim", "install", "-q", pkg],
-            check=False,  # Don't fail if already installed
-        )
 
 
 # Model files: (repo_id, hf_filename, local_path relative to models_dir)
