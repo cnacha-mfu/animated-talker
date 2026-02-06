@@ -43,7 +43,7 @@ class ContextPath(nn.Module):
         super().__init__()
         net = resnet18(weights=None)
         if pretrained_resnet:
-            state = torch.load(pretrained_resnet, map_location="cpu", weights_only=True)
+            state = torch.load(pretrained_resnet, map_location="cpu", weights_only=False)
             net.load_state_dict(state)
         self.conv1 = net.conv1
         self.bn1 = net.bn1
