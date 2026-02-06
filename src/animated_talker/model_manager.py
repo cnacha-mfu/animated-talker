@@ -106,70 +106,19 @@ def ensure_musetalk_deps() -> None:
 
     # Install mmlab packages (required for DWPose landmark detection).
     # We avoid openmim which breaks setuptools/pkg_resources on Python 3.12.
-    # Use pre-built mmcv wheels from OpenMMLab to avoid slow compilation.
-    logger.info("Installing mmlab packages (mmengine, mmcv, mmdet, mmpose)...")
+    # Use mmcv-lite (pure Python wheel, no compilation) since MuseTalk's
+    # DWPose inference doesn't need mmcv's custom CUDA kernels.
+    logger.info("Installing mmlab packages (mmengine, mmcv-lite, mmdet, mmpose)...")
 
+    mmlab_deps = [
+        "mmengine",
+        "mmcv-lite>=2.0.0",
+        "mmdet>=3.1.0",
+        "mmpose>=1.1.0",
+    ]
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q", "mmengine"],
+        [sys.executable, "-m", "pip", "install", "-q"] + mmlab_deps,
         check=True,
-    )
-
-    # Install mmcv with pre-built wheel (avoids 10+ min source compilation)
-    _install_mmcv_prebuilt()
-
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q", "mmdet>=3.1.0", "mmpose>=1.1.0"],
-        check=True,
-    )
-
-
-def _install_mmcv_prebuilt() -> None:
-    """Install mmcv using pre-built wheels or without custom CUDA ops.
-
-    Tries in order:
-    1. Pre-built wheel from OpenMMLab's index (fastest)
-    2. Source build WITHOUT custom CUDA ops (MMCV_WITH_OPS=0)
-    """
-    import torch
-
-    torch_version = torch.__version__.split("+")[0]  # e.g. "2.9.0"
-    tv_parts = torch_version.split(".")
-    torch_short = f"{tv_parts[0]}.{tv_parts[1]}.0"  # e.g. "2.9.0"
-
-    if torch.cuda.is_available():
-        cuda_version = torch.version.cuda.replace(".", "")  # e.g. "126"
-        cu_tag = f"cu{cuda_version}"
-    else:
-        cu_tag = "cpu"
-
-    wheel_index = (
-        f"https://download.openmmlab.com/mmcv/dist/{cu_tag}/torch{torch_short}/index.html"
-    )
-
-    logger.info("Trying pre-built mmcv wheel (%s, torch %s)...", cu_tag, torch_short)
-
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q",
-         "mmcv>=2.0.0", "-f", wheel_index],
-        capture_output=True, text=True,
-    )
-
-    if result.returncode == 0:
-        logger.info("mmcv installed from pre-built wheel")
-        return
-
-    # No pre-built wheel — install without custom CUDA ops (fast, ~1 min)
-    logger.info(
-        "No pre-built mmcv wheel for %s/torch%s. "
-        "Installing mmcv without custom CUDA ops (MMCV_WITH_OPS=0)...",
-        cu_tag, torch_short,
-    )
-    env = os.environ.copy()
-    env["MMCV_WITH_OPS"] = "0"
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q", "mmcv>=2.0.0"],
-        check=True,
-        env=env,
     )
 
 
