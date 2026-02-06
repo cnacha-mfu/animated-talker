@@ -61,7 +61,7 @@ class FaceParser:
         """Load BiSeNet face parsing model."""
         from animated_talker._bisenet import BiSeNet
 
-        self.model = BiSeNet(n_classes=19, pretrained_resnet=resnet_path)
+        self.model = BiSeNet(n_classes=19)
         state_dict = torch.load(bisenet_path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(state_dict)
         self.model.to(self.device)
