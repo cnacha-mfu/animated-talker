@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -Command:*)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}
