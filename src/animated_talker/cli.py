@@ -81,8 +81,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     gen.add_argument(
         "--device",
-        default="cuda",
-        help="PyTorch device (default: cuda)",
+        default="auto",
+        help="PyTorch device: auto, cuda, mps, cpu (default: auto)",
     )
     gen.add_argument(
         "--model-dir",
