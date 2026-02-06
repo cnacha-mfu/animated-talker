@@ -9,6 +9,43 @@ Powered by [MuseTalk v1.5](https://github.com/TMElyralab/MuseTalk) for real-time
 
 ## Quick Start
 
+### 1. Install the package
+
+```bash
+git clone https://github.com/cnacha-mfu/animated-talker.git
+cd animated-talker
+pip install -e .
+```
+
+### 2. Setup MuseTalk (clone repo + install deps + download models)
+
+**Run this first before generating any video:**
+
+```bash
+animated-talker setup
+```
+
+This will:
+- Clone the MuseTalk repo to `~/.cache/animated_talker/MuseTalk`
+- Install MuseTalk's Python dependencies (mmlab, etc.)
+- Download all model weights (~2.5 GB) to the correct locations
+
+To skip dependency installation (if you already have them):
+
+```bash
+animated-talker setup --no-deps
+```
+
+### 3. Generate a video
+
+```bash
+animated-talker generate \
+    --image avatar.png \
+    --audio speech.mp3 \
+    --output result.mp4 \
+    -v
+```
+
 ### Python API
 
 ```python
@@ -17,61 +54,25 @@ from animated_talker import generate
 generate(image="avatar.png", audio="speech.mp3", output="result.mp4")
 ```
 
-### CLI
-
-```bash
-animated-talker generate --image avatar.png --audio speech.mp3 --output result.mp4
-```
-
-## Installation
-
-### Prerequisites
+## Prerequisites
 
 - Python 3.10+
 - [FFmpeg](https://ffmpeg.org/download.html) (must be on PATH)
+- [Git](https://git-scm.com/) (to clone MuseTalk repo)
 - NVIDIA GPU with CUDA 11.8+ (recommended) or CPU (slower)
 
-### Install the package
+## CLI Reference
+
+### Generate video
 
 ```bash
-pip install -e .
-```
-
-With optional post-processing (face restoration + upscaling):
-
-```bash
-pip install -e ".[postprocess]"
-```
-
-### Download model weights (~2.5 GB)
-
-```bash
-animated-talker download-models
-```
-
-## Usage
-
-### Basic generation
-
-```bash
-animated-talker generate ^
-    --image avatar.png ^
-    --audio speech.mp3 ^
+animated-talker generate \
+    --image avatar.png \
+    --audio speech.mp3 \
     --output result.mp4
 ```
 
-### With post-processing
-
-```bash
-animated-talker generate ^
-    --image avatar.png ^
-    --audio speech.mp3 ^
-    --output result.mp4 ^
-    --face-restore ^
-    --upscale
-```
-
-### All options
+Options:
 
 ```
 --image, -i         Path to portrait image (JPEG/PNG) [required]
@@ -79,22 +80,48 @@ animated-talker generate ^
 --output, -o        Path for output video (MP4) [required]
 --fps               Video frame rate (default: 25)
 --bbox-shift        Jaw boundary shift in pixels (default: 0)
---face-restore      Apply CodeFormer face restoration
---upscale           Apply Real-ESRGAN 4x upscaling
---upscale-factor    Upscale multiplier (default: 4)
---restore-fidelity  CodeFormer fidelity 0.0-1.0 (default: 0.7)
 --batch-size        Frames per inference batch (default: 8)
 --no-float16        Disable FP16 inference (use FP32)
 --device            PyTorch device: auto, cuda, mps, cpu (default: auto)
---model-dir         Custom model directory
---crf               Video quality 0-51, lower is better (default: 18)
+--extra-margin      Extra margin below jaw in pixels (default: 10)
 --verbose, -v       Enable verbose logging
 ```
 
-### Check model status
+### Check status
 
 ```bash
 animated-talker check
+```
+
+Shows which components are installed and which models are downloaded.
+
+## Testing on Google Colab (Free T4 GPU)
+
+```python
+# Clone the repo
+!git clone https://github.com/cnacha-mfu/animated-talker.git
+%cd animated-talker
+
+# Install the package
+!pip install -e .
+
+# Setup MuseTalk (clone + deps + models) — do this first!
+!animated-talker setup -v
+
+# Upload your image and audio, then generate
+!animated-talker generate \
+    --image avatar.png \
+    --audio speech.mp3 \
+    --output result.mp4 \
+    -v
+```
+
+If you need to pull updates:
+
+```python
+!git fetch origin claude/add-lip-sync-video-XQKYM
+!git reset --hard origin/claude/add-lip-sync-video-XQKYM
+!pip install -e .
 ```
 
 ## Testing on GCP with GPU (Windows)
@@ -163,10 +190,12 @@ cd animated-talker
 pip install -e .
 ```
 
-### 7. Download model weights
+### 7. Setup MuseTalk (clone repo + install deps + download models)
+
+**Run this before generating:**
 
 ```bash
-animated-talker download-models
+animated-talker setup -v
 ```
 
 ### 8. Upload test files from Windows
@@ -229,10 +258,10 @@ gcloud compute instances delete animated-talker-test --zone=us-central1-a
 The tool auto-detects your hardware. On a machine without a GPU, it falls back to CPU automatically:
 
 ```bash
-animated-talker generate ^
-    --image avatar.png ^
-    --audio speech.mp3 ^
-    --output result.mp4 ^
+animated-talker generate \
+    --image avatar.png \
+    --audio speech.mp3 \
+    --output result.mp4 \
     --batch-size 2
 ```
 
@@ -241,17 +270,29 @@ animated-talker generate ^
 - Expect slower generation (~5-10x compared to GPU)
 - Use short audio clips (3-5 seconds) for quick testing
 
-## Project Structure
+## Architecture
+
+Animated Talker is a thin wrapper around MuseTalk's inference code:
 
 ```
 src/animated_talker/
     __init__.py          # Public API: generate()
-    pipeline.py          # Orchestrator
-    input_handler.py     # Face detection + audio loading
-    musetalk_engine.py   # MuseTalk v1.5 inference
-    video_encoder.py     # FFmpeg encoding + audio mux
-    postprocess.py       # CodeFormer + Real-ESRGAN (optional)
-    model_manager.py     # Model weight downloads
+    pipeline.py          # Orchestrator (device detection, setup, engine call)
+    musetalk_engine.py   # Thin wrapper around MuseTalk's inference functions
+    model_manager.py     # Clone MuseTalk repo + download model weights
+    postprocess.py       # CodeFormer + Real-ESRGAN (optional, future)
+    cli.py               # CLI: generate, setup, download-models, check
+```
+
+Models are stored at `~/.cache/animated_talker/MuseTalk/models/`:
+
+```
+models/
+    musetalkV15/         # UNet + config
+    sd-vae/              # Stable Diffusion VAE
+    whisper/             # Whisper tiny (audio features)
+    dwpose/              # DWPose (face landmark detection)
+    face-parse-bisent/   # BiSeNet (face parsing for blending)
 ```
 
 ## License
