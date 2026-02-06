@@ -62,8 +62,24 @@ class FaceParser:
         from animated_talker._bisenet import BiSeNet
 
         self.model = BiSeNet(n_classes=19)
+
+        # Remove ResNet fc layer (not used in segmentation, not in checkpoint)
+        if hasattr(self.model.cp.resnet, "fc"):
+            del self.model.cp.resnet.fc
+        if hasattr(self.model.cp.resnet, "avgpool"):
+            del self.model.cp.resnet.avgpool
+
         state_dict = torch.load(bisenet_path, map_location=self.device, weights_only=False)
-        self.model.load_state_dict(state_dict)
+
+        # Load with strict=False — some checkpoints omit SpatialPath weights
+        missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
+        if missing:
+            logger.warning("BiSeNet missing keys (will use init weights): %d keys", len(missing))
+            logger.debug("Missing: %s", missing[:5])
+        if unexpected:
+            logger.warning("BiSeNet unexpected keys (ignored): %d keys", len(unexpected))
+            logger.debug("Unexpected: %s", unexpected[:5])
+
         self.model.to(self.device)
         self.model.eval()
 
