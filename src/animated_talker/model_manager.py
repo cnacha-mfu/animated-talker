@@ -112,7 +112,7 @@ def ensure_musetalk_deps() -> None:
 
     mmlab_deps = [
         "mmengine",
-        "mmcv-lite>=2.0.0",
+        "mmcv-lite>=2.0.0,<2.2.0",
         "mmdet>=3.1.0",
         "mmpose>=1.1.0",
     ]
