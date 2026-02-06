@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "animated-talker"
+version = "0.1.0"
+description = "Generate lip-synced talking avatar videos from a portrait image and audio file"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10,<3.13"
+authors = [{ name = "Animated Talker Contributors" }]
+keywords = ["lip-sync", "talking-head", "avatar", "video-generation", "musetalk"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "diffusers>=0.25",
+    "transformers>=4.36",
+    "opencv-python>=4.9",
+    "numpy>=1.23",
+    "librosa>=0.10",
+    "Pillow>=9.0",
+    "huggingface-hub>=0.20",
+    "face-alignment>=1.4",
+    "tqdm>=4.60",
+]
+
+[project.optional-dependencies]
+postprocess = [
+    "basicsr>=1.4",
+    "realesrgan>=0.3",
+    "gfpgan>=1.3",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[project.scripts]
+animated-talker = "animated_talker.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/animated_talker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
