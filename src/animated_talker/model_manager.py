@@ -45,7 +45,35 @@ def ensure_musetalk_repo() -> Path:
         check=True,
     )
     logger.info("MuseTalk cloned to %s", musetalk_dir)
+
+    # Patch MuseTalk for PyTorch 2.6+ compatibility
+    _patch_musetalk_torch_load(musetalk_dir)
+
     return musetalk_dir
+
+
+def _patch_musetalk_torch_load(musetalk_dir: Path) -> None:
+    """Patch torch.load() calls in MuseTalk to use weights_only=False.
+
+    PyTorch 2.6 changed the default to weights_only=True, which breaks
+    loading legacy .tar format checkpoints (resnet18, bisenet).
+    """
+    files_to_patch = [
+        musetalk_dir / "musetalk" / "utils" / "face_parsing" / "resnet.py",
+        musetalk_dir / "musetalk" / "utils" / "face_parsing" / "model.py",
+    ]
+    for fpath in files_to_patch:
+        if not fpath.exists():
+            continue
+        text = fpath.read_text()
+        if "weights_only" not in text and "torch.load(" in text:
+            patched = text.replace(
+                "torch.load(model_path)",
+                "torch.load(model_path, weights_only=False)",
+            )
+            if patched != text:
+                fpath.write_text(patched)
+                logger.info("Patched %s for PyTorch 2.6+ compatibility", fpath.name)
 
 
 def ensure_musetalk_deps() -> None:
@@ -148,6 +176,8 @@ def setup_all(install_deps: bool = False) -> Path:
     Returns path to MuseTalk directory.
     """
     musetalk_dir = ensure_musetalk_repo()
+    # Always apply patches (idempotent) in case repo was cloned before patch existed
+    _patch_musetalk_torch_load(musetalk_dir)
     if install_deps:
         ensure_musetalk_deps()
     ensure_models()
