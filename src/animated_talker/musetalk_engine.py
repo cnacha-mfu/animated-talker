@@ -1,403 +1,282 @@
-"""MuseTalk v1.5 lip-sync inference engine.
+"""Thin wrapper around MuseTalk v1.5 inference pipeline.
 
-This module vendors the core inference logic from MuseTalk, wrapping the
-VAE, UNet, Whisper feature extraction, and face compositing into a single
-class that takes a face crop + audio and produces lip-synced frames.
-
-Reference: https://github.com/TMElyralab/MuseTalk
+Uses MuseTalk's own code for model loading, audio processing,
+face detection, UNet inference, and face blending.
 """
 
 from __future__ import annotations
 
+import copy
+import glob
 import logging
-import math
+import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
-import torch.nn as nn
-from diffusers import AutoencoderKL, UNet2DConditionModel
-from PIL import Image
 from tqdm import tqdm
-from transformers import WhisperModel, WhisperProcessor
 
-from animated_talker.model_manager import get_model_dir, get_model_path
+from animated_talker.model_manager import ensure_musetalk_on_path, get_models_dir
 
 logger = logging.getLogger(__name__)
 
 
-class PositionalEncoding(nn.Module):
-    """Sinusoidal positional encoding for audio features."""
-
-    def __init__(self, d_model: int = 384, max_len: int = 5000):
-        super().__init__()
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
-        )
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)  # (1, max_len, d_model)
-        self.register_buffer("pe", pe)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.pe[:, : x.size(1)]
-
-
-class FaceParser:
-    """BiSeNet-based face parsing for compositing masks.
-
-    Generates semantic segmentation masks to blend the generated mouth
-    region seamlessly with the original face.
-    """
-
-    def __init__(self, bisenet_path: str, resnet_path: str, device: str = "cuda"):
-        self.device = device
-        self._load_bisenet(bisenet_path, resnet_path)
-
-    def _load_bisenet(self, bisenet_path: str, resnet_path: str) -> None:
-        """Load BiSeNet face parsing model."""
-        from animated_talker._bisenet import BiSeNet
-
-        self.model = BiSeNet(n_classes=19)
-
-        # Remove ResNet fc layer (not used in segmentation, not in checkpoint)
-        if hasattr(self.model.cp.resnet, "fc"):
-            del self.model.cp.resnet.fc
-        if hasattr(self.model.cp.resnet, "avgpool"):
-            del self.model.cp.resnet.avgpool
-
-        state_dict = torch.load(bisenet_path, map_location=self.device, weights_only=False)
-
-        # Load with strict=False — some checkpoints omit SpatialPath weights
-        missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
-        if missing:
-            logger.warning("BiSeNet missing keys (will use init weights): %d keys", len(missing))
-            logger.debug("Missing: %s", missing[:5])
-        if unexpected:
-            logger.warning("BiSeNet unexpected keys (ignored): %d keys", len(unexpected))
-            logger.debug("Unexpected: %s", unexpected[:5])
-
-        self.model.to(self.device)
-        self.model.eval()
-
-    def parse(self, face_image: np.ndarray) -> np.ndarray:
-        """Parse a face image and return semantic label map.
-
-        Args:
-            face_image: BGR image of shape (H, W, 3)
-
-        Returns:
-            Label map of shape (H, W) with class indices 0-18
-        """
-        h, w = face_image.shape[:2]
-        img = cv2.resize(face_image, (512, 512))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = img.astype(np.float32) / 255.0
-        img = (img - np.array([0.485, 0.456, 0.406])) / np.array([0.229, 0.224, 0.225])
-        img = img.transpose(2, 0, 1)
-        tensor = torch.from_numpy(img).unsqueeze(0).float().to(self.device)
-
-        with torch.no_grad():
-            out = self.model(tensor)[0]
-        parsing = out.squeeze(0).cpu().numpy().argmax(0).astype(np.uint8)
-        parsing = cv2.resize(parsing, (w, h), interpolation=cv2.INTER_NEAREST)
-        return parsing
-
-    def get_mouth_mask(
-        self,
-        face_image: np.ndarray,
-        upper_boundary_ratio: float = 0.5,
-        blur_kernel: int = 21,
-    ) -> np.ndarray:
-        """Generate a soft mask for the lower face / mouth region.
-
-        Returns a float32 mask of shape (H, W) in range [0, 1].
-        """
-        parsing = self.parse(face_image)
-        h, w = parsing.shape
-
-        # Face parsing labels: 1=skin, 11=upper_lip, 12=lower_lip, 13=teeth/mouth
-        # Create mask for lower face region
-        mouth_labels = {1, 11, 12, 13}
-        mask = np.isin(parsing, list(mouth_labels)).astype(np.float32)
-
-        # Zero out upper portion of face
-        cutoff = int(h * upper_boundary_ratio)
-        mask[:cutoff] = 0
-
-        # Gaussian blur for smooth edges
-        if blur_kernel > 0:
-            mask = cv2.GaussianBlur(mask, (blur_kernel, blur_kernel), 0)
-
-        return mask
-
-
 class MuseTalkEngine:
-    """MuseTalk v1.5 inference engine for lip-sync frame generation.
+    """MuseTalk v1.5 inference engine.
 
-    Loads the VAE, UNet, Whisper model, and face parser, then generates
-    lip-synced frames from a face crop and audio waveform.
+    Wraps MuseTalk's actual inference code for reliable lip-sync generation.
     """
 
     def __init__(
         self,
-        model_dir: str | Path | None = None,
         device: str = "cuda",
         use_float16: bool = True,
     ):
-        self.device = device
-        self.dtype = torch.float16 if use_float16 and device != "cpu" else torch.float32
-        self.model_dir = Path(model_dir) if model_dir else get_model_dir()
+        self.device = torch.device(device)
+        self.use_float16 = use_float16 and device != "cpu"
+
+        # Ensure MuseTalk is importable
+        ensure_musetalk_on_path()
 
         self._load_models()
 
     def _load_models(self) -> None:
-        """Load all required models."""
-        logger.info("Loading MuseTalk models...")
+        """Load all models using MuseTalk's own loaders."""
+        models_dir = get_models_dir()
 
-        # Load VAE
-        vae_dir = self.model_dir / "sd-vae-ft-mse"
-        self.vae = AutoencoderKL.from_pretrained(str(vae_dir))
-        self.vae = self.vae.to(self.device, dtype=self.dtype)
-        self.vae.eval()
-        logger.info("VAE loaded")
+        # Change to MuseTalk dir so relative paths work
+        from animated_talker.model_manager import get_musetalk_dir
+        original_cwd = os.getcwd()
+        os.chdir(str(get_musetalk_dir()))
 
-        # Load UNet
-        musetalk_dir = self.model_dir / "musetalk"
-        config_path = musetalk_dir / "musetalk.json"
-        weights_path = musetalk_dir / "unet.pth"
+        try:
+            from musetalk.utils.utils import load_all_model
+            from musetalk.utils.audio_processor import AudioProcessor
+            from musetalk.utils.face_parsing import FaceParsing
+            from transformers import WhisperModel
 
-        self.unet = UNet2DConditionModel.from_config(str(config_path))
-        state_dict = torch.load(str(weights_path), map_location="cpu", weights_only=False)
-        self.unet.load_state_dict(state_dict)
-        self.unet = self.unet.to(self.device, dtype=self.dtype)
-        self.unet.eval()
-        logger.info("UNet loaded")
+            logger.info("Loading MuseTalk models...")
 
-        # Load positional encoding
-        self.pe = PositionalEncoding(d_model=384).to(self.device, dtype=self.dtype)
+            # Load VAE, UNet, PositionalEncoding
+            self.vae, self.unet, self.pe = load_all_model(
+                unet_model_path=str(models_dir / "musetalkV15" / "unet.pth"),
+                vae_type="sd-vae",
+                unet_config=str(models_dir / "musetalkV15" / "musetalk.json"),
+                device=self.device,
+            )
 
-        # Load Whisper for audio feature extraction
-        whisper_dir = self.model_dir / "whisper-tiny"
-        self.whisper_processor = WhisperProcessor.from_pretrained(str(whisper_dir))
-        self.whisper_model = WhisperModel.from_pretrained(str(whisper_dir))
-        self.whisper_model = self.whisper_model.to(self.device, dtype=self.dtype)
-        self.whisper_model.eval()
-        logger.info("Whisper loaded")
+            if self.use_float16:
+                self.pe = self.pe.half().to(self.device)
+                self.vae.vae = self.vae.vae.half().to(self.device)
+                self.unet.model = self.unet.model.half().to(self.device)
+            else:
+                self.pe = self.pe.float().to(self.device)
+                self.vae.vae = self.vae.vae.float().to(self.device)
+                self.unet.model = self.unet.model.float().to(self.device)
 
-        # Load face parser for compositing
-        bisenet_path = get_model_path("face_parse_bisenet", self.model_dir)
-        resnet_path = get_model_path("face_parse_resnet", self.model_dir)
-        self.face_parser = FaceParser(
-            str(bisenet_path), str(resnet_path), device=self.device
-        )
-        logger.info("Face parser loaded")
+            # Audio processor (Whisper-based)
+            self.audio_processor = AudioProcessor(
+                feature_extractor_path=str(models_dir / "whisper")
+            )
 
-        logger.info("All models loaded successfully")
+            # Whisper model for feature extraction
+            weight_dtype = self.unet.model.dtype
+            self.whisper = WhisperModel.from_pretrained(
+                str(models_dir / "whisper")
+            ).to(device=self.device, dtype=weight_dtype).eval()
+            self.whisper.requires_grad_(False)
+            self.weight_dtype = weight_dtype
 
-    def extract_audio_features(
-        self,
-        audio: np.ndarray,
-        sr: int = 16000,
-    ) -> torch.Tensor:
-        """Extract Whisper encoder embeddings from audio.
+            # Face parsing for blending
+            self.face_parser = FaceParsing()
 
-        Args:
-            audio: Float32 waveform at target sample rate
-            sr: Sample rate (default 16000 for Whisper)
+            # Timestep tensor (single-step, not diffusion)
+            self.timesteps = torch.tensor([0], device=self.device)
 
-        Returns:
-            Tensor of shape (num_frames, feature_dim) where feature_dim=384
-        """
-        # Process audio through Whisper
-        inputs = self.whisper_processor(
-            audio, sampling_rate=sr, return_tensors="pt"
-        )
-        input_features = inputs.input_features.to(self.device, dtype=self.dtype)
-
-        with torch.no_grad():
-            encoder_output = self.whisper_model.encoder(input_features)
-            features = encoder_output.last_hidden_state  # (1, T, 384)
-
-        return features.squeeze(0)  # (T, 384)
-
-    def features_to_chunks(
-        self,
-        features: torch.Tensor,
-        num_frames: int,
-        fps: int = 25,
-        padding_left: int = 2,
-        padding_right: int = 2,
-    ) -> list[torch.Tensor]:
-        """Map Whisper features to per-frame audio chunks.
-
-        Whisper features are at ~50 FPS. We map them to video frames at
-        the target FPS using a sliding window.
-
-        Args:
-            features: (T_audio, 384) Whisper encoder features
-            num_frames: Number of video frames to generate
-            fps: Target video frame rate
-            padding_left: Number of context frames to include before
-            padding_right: Number of context frames to include after
-
-        Returns:
-            List of tensors, one per video frame, each (window_size, 384)
-        """
-        T_audio = features.shape[0]
-
-        # Whisper features are at 50 FPS (30 seconds audio -> 1500 features)
-        whisper_fps = 50.0
-        chunk_size = padding_left + 1 + padding_right
-
-        chunks = []
-        for i in range(num_frames):
-            # Map video frame index to whisper feature index
-            center = int(i * whisper_fps / fps)
-            start = max(0, center - padding_left)
-            end = min(T_audio, center + padding_right + 1)
-
-            chunk = features[start:end]
-
-            # Pad if necessary
-            if chunk.shape[0] < chunk_size:
-                pad_size = chunk_size - chunk.shape[0]
-                padding = torch.zeros(pad_size, features.shape[1], device=features.device, dtype=features.dtype)
-                chunk = torch.cat([chunk, padding], dim=0)
-
-            chunks.append(chunk[:chunk_size])
-
-        return chunks
+            logger.info("All models loaded successfully")
+        finally:
+            os.chdir(original_cwd)
 
     @torch.no_grad()
-    def generate_frames(
+    def generate(
         self,
-        face_crop: np.ndarray,
-        original_frame: np.ndarray,
-        bbox: tuple[int, int, int, int],
-        audio: np.ndarray,
+        image_path: str,
+        audio_path: str,
+        output_path: str,
         fps: int = 25,
         batch_size: int = 8,
-    ) -> list[np.ndarray]:
-        """Generate lip-synced frames from a face crop and audio.
+        bbox_shift: int = 0,
+        extra_margin: int = 10,
+    ) -> str:
+        """Generate lip-synced video from image + audio.
+
+        Uses MuseTalk's full pipeline: face detection, audio features,
+        UNet inference, face blending, and FFmpeg encoding.
 
         Args:
-            face_crop: 256x256 BGR face crop
-            original_frame: Full-resolution BGR original image
-            bbox: (x1, y1, x2, y2) bounding box of face in original
-            audio: Float32 mono waveform at 16kHz
-            fps: Target video frame rate
-            batch_size: Number of frames to process together
+            image_path: Path to portrait image (JPEG/PNG)
+            audio_path: Path to audio file (MP3/WAV)
+            output_path: Path for output video (MP4)
+            fps: Video frame rate (default 25)
+            batch_size: Frames per batch (default 8)
+            bbox_shift: Face bbox vertical shift (default 0)
+            extra_margin: Extra margin below jaw (default 10)
 
         Returns:
-            List of full-resolution BGR frames with lip-synced face composited
+            Path to output video
         """
-        duration = len(audio) / 16000
-        num_frames = int(duration * fps)
+        from animated_talker.model_manager import get_musetalk_dir
 
-        if num_frames == 0:
-            raise ValueError("Audio too short to generate any frames")
+        original_cwd = os.getcwd()
+        os.chdir(str(get_musetalk_dir()))
 
-        logger.info("Generating %d frames at %d FPS (%.2fs)", num_frames, fps, duration)
+        try:
+            return self._run_inference(
+                image_path, audio_path, output_path,
+                fps, batch_size, bbox_shift, extra_margin,
+            )
+        finally:
+            os.chdir(original_cwd)
 
-        # Encode reference face to latent
-        ref_image = self._preprocess_face(face_crop)
-        ref_latent = self.vae.encode(ref_image).latent_dist.sample()
-        ref_latent = ref_latent * self.vae.config.scaling_factor
+    def _run_inference(
+        self,
+        image_path: str,
+        audio_path: str,
+        output_path: str,
+        fps: int,
+        batch_size: int,
+        bbox_shift: int,
+        extra_margin: int,
+    ) -> str:
+        from musetalk.utils.utils import datagen
+        from musetalk.utils.preprocessing import get_landmark_and_bbox, coord_placeholder
+        from musetalk.utils.blending import get_image
 
-        # Create masked face latent (mask bottom half)
-        masked_face = face_crop.copy()
-        masked_face[128:, :, :] = 0  # Zero bottom half (mouth region)
-        masked_image = self._preprocess_face(masked_face)
-        masked_latent = self.vae.encode(masked_image).latent_dist.sample()
-        masked_latent = masked_latent * self.vae.config.scaling_factor
+        # Create temp directories
+        tmp_dir = tempfile.mkdtemp(prefix="animated_talker_")
+        frames_dir = os.path.join(tmp_dir, "frames")
+        result_dir = os.path.join(tmp_dir, "results")
+        os.makedirs(frames_dir, exist_ok=True)
+        os.makedirs(result_dir, exist_ok=True)
 
-        # Extract audio features
-        audio_features = self.extract_audio_features(audio)
-        audio_chunks = self.features_to_chunks(audio_features, num_frames, fps)
+        try:
+            # Step 1: Create input frames from single image
+            logger.info("Preparing input frames...")
+            image = cv2.imread(image_path)
+            if image is None:
+                raise ValueError(f"Failed to read image: {image_path}")
 
-        # Get face parsing mask for compositing
-        mouth_mask = self.face_parser.get_mouth_mask(face_crop)
+            # Determine frame count from audio duration
+            import librosa
+            audio_data, sr = librosa.load(audio_path, sr=16000)
+            duration = len(audio_data) / sr
+            num_frames = int(duration * fps)
+            logger.info("Audio: %.2fs → %d frames at %d FPS", duration, num_frames, fps)
 
-        # Generate frames in batches
-        generated_crops = []
-        for batch_start in tqdm(
-            range(0, num_frames, batch_size),
-            desc="Generating frames",
-            unit="batch",
-        ):
-            batch_end = min(batch_start + batch_size, num_frames)
-            batch_chunks = audio_chunks[batch_start:batch_end]
-            current_batch_size = len(batch_chunks)
+            # Write frames (MuseTalk expects numbered PNGs)
+            for i in range(num_frames):
+                cv2.imwrite(os.path.join(frames_dir, f"{i:08d}.png"), image)
 
-            # Stack audio chunks and apply positional encoding
-            audio_batch = torch.stack(batch_chunks)  # (B, window, 384)
-            audio_batch = self.pe(audio_batch)
+            input_img_list = sorted(glob.glob(os.path.join(frames_dir, "*.png")))
 
-            # Repeat latents for batch
-            ref_batch = ref_latent.repeat(current_batch_size, 1, 1, 1)
-            masked_batch = masked_latent.repeat(current_batch_size, 1, 1, 1)
+            # Step 2: Extract audio features
+            logger.info("Extracting audio features...")
+            whisper_input_features, librosa_length = self.audio_processor.get_audio_feature(
+                audio_path
+            )
+            whisper_chunks = self.audio_processor.get_whisper_chunk(
+                whisper_input_features,
+                self.device,
+                self.weight_dtype,
+                self.whisper,
+                librosa_length,
+                fps=fps,
+                audio_padding_length_left=2,
+                audio_padding_length_right=2,
+            )
 
-            # Concatenate masked + reference latents channel-wise
-            latent_input = torch.cat([masked_batch, ref_batch], dim=1)
+            # Step 3: Detect face landmarks and bounding boxes
+            logger.info("Detecting faces...")
+            coord_list, frame_list = get_landmark_and_bbox(
+                input_img_list, upperbondrange=bbox_shift
+            )
 
-            # UNet forward pass (single-step, not diffusion)
-            timestep = torch.zeros(current_batch_size, device=self.device, dtype=torch.long)
-            pred_latent = self.unet(
-                latent_input,
-                timestep,
-                encoder_hidden_states=audio_batch,
-            ).sample
+            # Step 4: Encode cropped faces to VAE latents
+            logger.info("Encoding face latents...")
+            input_latent_list = []
+            for bbox, frame in zip(coord_list, frame_list):
+                if bbox == coord_placeholder:
+                    continue
+                x1, y1, x2, y2 = bbox
+                y2 = min(y2 + extra_margin, frame.shape[0])
+                crop = cv2.resize(
+                    frame[y1:y2, x1:x2], (256, 256),
+                    interpolation=cv2.INTER_LANCZOS4,
+                )
+                input_latent_list.append(self.vae.get_latents_for_unet(crop))
 
-            # Decode predicted latent to pixel space
-            pred_latent = pred_latent / self.vae.config.scaling_factor
-            decoded = self.vae.decode(pred_latent).sample
+            if not input_latent_list:
+                raise ValueError("No face detected in the image")
 
-            # Convert to numpy images
-            for j in range(current_batch_size):
-                img = decoded[j].cpu().float().numpy()
-                img = (img * 0.5 + 0.5).clip(0, 1)
-                img = (img.transpose(1, 2, 0) * 255).astype(np.uint8)
-                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                generated_crops.append(img)
+            # Step 5: Create cycled lists
+            frame_list_cycle = frame_list + frame_list[::-1]
+            coord_list_cycle = coord_list + coord_list[::-1]
+            input_latent_list_cycle = input_latent_list + input_latent_list[::-1]
 
-        # Composite generated faces onto original frame
-        logger.info("Compositing %d frames...", len(generated_crops))
-        output_frames = []
-        x1, y1, x2, y2 = bbox
-        crop_h, crop_w = y2 - y1, x2 - x1
+            # Step 6: Batch inference through UNet
+            logger.info("Running UNet inference (%d chunks, batch_size=%d)...",
+                        len(whisper_chunks), batch_size)
+            gen = datagen(
+                whisper_chunks, input_latent_list_cycle,
+                batch_size=batch_size, device=self.device,
+            )
+            res_frame_list = []
+            for whisper_batch, latent_batch in tqdm(gen, desc="Generating"):
+                audio_feature_batch = self.pe(whisper_batch)
+                pred_latents = self.unet.model(
+                    latent_batch.to(dtype=self.unet.model.dtype),
+                    self.timesteps,
+                    encoder_hidden_states=audio_feature_batch,
+                ).sample
+                for frame in self.vae.decode_latents(pred_latents):
+                    res_frame_list.append(frame)
 
-        for gen_crop in generated_crops:
-            frame = original_frame.copy()
+            # Step 7: Blend generated faces onto original frames
+            logger.info("Blending %d frames...", len(res_frame_list))
+            for i, res_frame in enumerate(tqdm(res_frame_list, desc="Blending")):
+                bbox = coord_list_cycle[i % len(coord_list_cycle)]
+                ori_frame = copy.deepcopy(frame_list_cycle[i % len(frame_list_cycle)])
+                x1, y1, x2, y2 = bbox
+                y2 = min(y2 + extra_margin, ori_frame.shape[0])
+                res_frame = cv2.resize(
+                    res_frame.astype(np.uint8),
+                    (x2 - x1, y2 - y1),
+                )
+                combine = get_image(
+                    ori_frame, res_frame, [x1, y1, x2, y2],
+                    mode="jaw", fp=self.face_parser,
+                )
+                cv2.imwrite(os.path.join(result_dir, f"{i:08d}.png"), combine)
 
-            # Resize generated crop to match original bbox size
-            gen_resized = cv2.resize(gen_crop, (crop_w, crop_h), interpolation=cv2.INTER_LANCZOS4)
+            # Step 8: Encode video with FFmpeg
+            logger.info("Encoding video...")
+            temp_video = os.path.join(tmp_dir, "temp.mp4")
+            os.system(
+                f'ffmpeg -y -v warning -r {fps} -f image2 '
+                f'-i "{result_dir}/%08d.png" '
+                f'-vcodec libx264 -vf format=yuv420p -crf 18 "{temp_video}"'
+            )
+            os.system(
+                f'ffmpeg -y -v warning -i "{audio_path}" -i "{temp_video}" '
+                f'-c:v copy -c:a aac -shortest "{output_path}"'
+            )
 
-            # Resize mask to match
-            mask_resized = cv2.resize(mouth_mask, (crop_w, crop_h))
-            mask_3ch = np.stack([mask_resized] * 3, axis=-1)
+            logger.info("Output saved to %s", output_path)
+            return output_path
 
-            # Blend: generated face in mouth region, original elsewhere
-            original_crop = frame[y1:y2, x1:x2].astype(np.float32)
-            gen_float = gen_resized.astype(np.float32)
-            blended = original_crop * (1 - mask_3ch) + gen_float * mask_3ch
-            frame[y1:y2, x1:x2] = blended.astype(np.uint8)
-
-            output_frames.append(frame)
-
-        logger.info("Frame generation complete")
-        return output_frames
-
-    def _preprocess_face(self, face_bgr: np.ndarray) -> torch.Tensor:
-        """Convert a 256x256 BGR face image to model input tensor.
-
-        Returns tensor of shape (1, 3, 256, 256) normalized to [-1, 1].
-        """
-        rgb = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB)
-        tensor = torch.from_numpy(rgb).float() / 255.0
-        tensor = tensor * 2.0 - 1.0  # Normalize to [-1, 1]
-        tensor = tensor.permute(2, 0, 1).unsqueeze(0)
-        return tensor.to(self.device, dtype=self.dtype)
+        finally:
+            # Cleanup temp files
+            shutil.rmtree(tmp_dir, ignore_errors=True)

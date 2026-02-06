@@ -1,138 +1,178 @@
-"""Download and manage model weights from HuggingFace Hub."""
+"""Setup and manage MuseTalk dependency and model weights."""
 
 from __future__ import annotations
 
 import logging
 import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from huggingface_hub import hf_hub_download
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_DIR = Path.home() / ".cache" / "animated_talker" / "models"
+DEFAULT_INSTALL_DIR = Path.home() / ".cache" / "animated_talker"
 
-# (repo_id, filename, subfolder in local cache)
-HF_MODELS: dict[str, tuple[str, str, str]] = {
-    "musetalk_config": (
-        "TMElyralab/MuseTalk",
-        "musetalkV15/musetalk.json",
-        "musetalk",
-    ),
-    "musetalk_unet": (
-        "TMElyralab/MuseTalk",
-        "musetalkV15/unet.pth",
-        "musetalk",
-    ),
-    "sd_vae_config": (
-        "stabilityai/sd-vae-ft-mse",
-        "config.json",
-        "sd-vae-ft-mse",
-    ),
-    "sd_vae_weights": (
-        "stabilityai/sd-vae-ft-mse",
-        "diffusion_pytorch_model.safetensors",
-        "sd-vae-ft-mse",
-    ),
-    "whisper_tiny": (
-        "openai/whisper-tiny",
-        "model.safetensors",
-        "whisper-tiny",
-    ),
-    "whisper_config": (
-        "openai/whisper-tiny",
-        "config.json",
-        "whisper-tiny",
-    ),
-    "whisper_preprocessor": (
-        "openai/whisper-tiny",
-        "preprocessor_config.json",
-        "whisper-tiny",
-    ),
-    "face_parse_bisenet": (
-        "ManyOtherFunctions/face-parse-bisent",
-        "79999_iter.pth",
-        "face-parse-bisenet",
-    ),
-    "face_parse_resnet": (
-        "ManyOtherFunctions/face-parse-bisent",
-        "resnet18-5c106cde.pth",
-        "face-parse-bisenet",
-    ),
+
+def get_install_dir() -> Path:
+    env_dir = os.environ.get("ANIMATED_TALKER_DIR")
+    if env_dir:
+        return Path(env_dir)
+    return DEFAULT_INSTALL_DIR
+
+
+def get_musetalk_dir() -> Path:
+    return get_install_dir() / "MuseTalk"
+
+
+def get_models_dir() -> Path:
+    return get_musetalk_dir() / "models"
+
+
+def ensure_musetalk_repo() -> Path:
+    """Clone MuseTalk repo if not present. Returns path to repo."""
+    musetalk_dir = get_musetalk_dir()
+    if (musetalk_dir / "musetalk").is_dir():
+        logger.info("MuseTalk repo found at %s", musetalk_dir)
+        return musetalk_dir
+
+    logger.info("Cloning MuseTalk repo...")
+    musetalk_dir.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "clone", "https://github.com/TMElyralab/MuseTalk.git", str(musetalk_dir)],
+        check=True,
+    )
+    logger.info("MuseTalk cloned to %s", musetalk_dir)
+    return musetalk_dir
+
+
+def ensure_musetalk_deps() -> None:
+    """Install MuseTalk Python dependencies."""
+    musetalk_dir = get_musetalk_dir()
+    req_file = musetalk_dir / "requirements.txt"
+    if not req_file.exists():
+        logger.warning("requirements.txt not found in MuseTalk repo")
+        return
+
+    logger.info("Installing MuseTalk dependencies...")
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q", "-r", str(req_file)],
+        check=True,
+    )
+
+    # Install mmlab packages (required for DWPose landmark detection)
+    logger.info("Installing mmlab packages...")
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir", "-U", "openmim"],
+        check=True,
+    )
+    for pkg in ["mmengine", "mmcv==2.0.1", "mmdet==3.1.0", "mmpose==1.1.0"]:
+        subprocess.run(
+            [sys.executable, "-m", "mim", "install", "-q", pkg],
+            check=False,  # Don't fail if already installed
+        )
+
+
+# Model files to download: (repo_id, filename)
+HF_DOWNLOADS: list[tuple[str, str]] = [
+    # MuseTalk v1.5 UNet
+    ("TMElyralab/MuseTalk", "musetalkV15/musetalk.json"),
+    ("TMElyralab/MuseTalk", "musetalkV15/unet.pth"),
+    # SD VAE
+    ("stabilityai/sd-vae-ft-mse", "config.json"),
+    ("stabilityai/sd-vae-ft-mse", "diffusion_pytorch_model.bin"),
+    # Whisper tiny
+    ("openai/whisper-tiny", "config.json"),
+    ("openai/whisper-tiny", "pytorch_model.bin"),
+    ("openai/whisper-tiny", "preprocessor_config.json"),
+    # DWPose
+    ("yzd-v/DWPose", "dw-ll_ucoco_384.pth"),
+    # Face parsing
+    ("ManyOtherFunctions/face-parse-bisent", "79999_iter.pth"),
+    ("ManyOtherFunctions/face-parse-bisent", "resnet18-5c106cde.pth"),
+]
+
+# Map HuggingFace paths to local model subdirectory
+LOCAL_DIR_MAP: dict[str, str] = {
+    "TMElyralab/MuseTalk": "",  # Files already have musetalkV15/ prefix
+    "stabilityai/sd-vae-ft-mse": "sd-vae",
+    "openai/whisper-tiny": "whisper",
+    "yzd-v/DWPose": "dwpose",
+    "ManyOtherFunctions/face-parse-bisent": "face-parse-bisent",
 }
 
 
-def get_model_dir() -> Path:
-    """Return the root model directory, respecting ANIMATED_TALKER_MODEL_DIR env var."""
-    env_dir = os.environ.get("ANIMATED_TALKER_MODEL_DIR")
-    if env_dir:
-        return Path(env_dir)
-    return DEFAULT_MODEL_DIR
+def ensure_models() -> Path:
+    """Download all required model weights into MuseTalk's models/ dir."""
+    models_dir = get_models_dir()
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    for repo_id, filename in HF_DOWNLOADS:
+        local_subdir = LOCAL_DIR_MAP[repo_id]
+        if local_subdir:
+            target_dir = models_dir / local_subdir
+        else:
+            target_dir = models_dir
+
+        target_file = target_dir / Path(filename).name
+        if target_file.exists():
+            logger.debug("Already exists: %s", target_file)
+            continue
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Downloading %s/%s ...", repo_id, filename)
+        downloaded = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            local_dir=target_dir,
+            local_dir_use_symlinks=False,
+        )
+
+        # hf_hub_download may nest files — move to expected flat location
+        downloaded_path = Path(downloaded)
+        if downloaded_path != target_file and downloaded_path.exists():
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(downloaded_path), str(target_file))
+
+    logger.info("All models downloaded to %s", models_dir)
+    return models_dir
 
 
-def get_model_path(model_key: str, model_dir: Path | None = None) -> Path:
-    """Return the expected local path for a model file."""
-    if model_dir is None:
-        model_dir = get_model_dir()
-    _, filename, subfolder = HF_MODELS[model_key]
-    basename = Path(filename).name
-    return model_dir / subfolder / basename
+def ensure_musetalk_on_path() -> None:
+    """Add MuseTalk repo to sys.path so we can import its modules."""
+    musetalk_dir = str(get_musetalk_dir())
+    if musetalk_dir not in sys.path:
+        sys.path.insert(0, musetalk_dir)
 
 
-def download_model(model_key: str, model_dir: Path | None = None) -> Path:
-    """Download a single model file if not already present. Returns local path."""
-    if model_dir is None:
-        model_dir = get_model_dir()
+def setup_all(install_deps: bool = False) -> Path:
+    """Full setup: clone repo, optionally install deps, download models.
 
-    local_path = get_model_path(model_key, model_dir)
-    if local_path.exists():
-        logger.debug("Model %s already exists at %s", model_key, local_path)
-        return local_path
-
-    repo_id, filename, subfolder = HF_MODELS[model_key]
-    local_path.parent.mkdir(parents=True, exist_ok=True)
-
-    logger.info("Downloading %s from %s ...", model_key, repo_id)
-    downloaded = hf_hub_download(
-        repo_id=repo_id,
-        filename=filename,
-        local_dir=model_dir / subfolder,
-        local_dir_use_symlinks=False,
-    )
-
-    # hf_hub_download may place the file in a nested path matching the repo structure.
-    # Move it to our expected flat location if needed.
-    downloaded_path = Path(downloaded)
-    if downloaded_path != local_path and downloaded_path.exists():
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        downloaded_path.rename(local_path)
-
-    logger.info("Downloaded %s to %s", model_key, local_path)
-    return local_path
+    Returns path to MuseTalk directory.
+    """
+    musetalk_dir = ensure_musetalk_repo()
+    if install_deps:
+        ensure_musetalk_deps()
+    ensure_models()
+    ensure_musetalk_on_path()
+    return musetalk_dir
 
 
-def ensure_models(
-    model_dir: Path | None = None,
-    include_postprocess: bool = False,
-) -> dict[str, Path]:
-    """Download all required models. Returns dict of model_key -> local_path."""
-    if model_dir is None:
-        model_dir = get_model_dir()
+def verify_setup() -> dict[str, bool]:
+    """Check what's installed and available."""
+    musetalk_dir = get_musetalk_dir()
+    models_dir = get_models_dir()
 
-    paths = {}
-    for key in HF_MODELS:
-        paths[key] = download_model(key, model_dir)
-
-    return paths
-
-
-def verify_models(model_dir: Path | None = None) -> dict[str, bool]:
-    """Check which models are present locally."""
-    if model_dir is None:
-        model_dir = get_model_dir()
-
-    status = {}
-    for key in HF_MODELS:
-        path = get_model_path(key, model_dir)
-        status[key] = path.exists()
+    status = {
+        "musetalk_repo": (musetalk_dir / "musetalk").is_dir(),
+        "unet_weights": (models_dir / "musetalkV15" / "unet.pth").exists(),
+        "unet_config": (models_dir / "musetalkV15" / "musetalk.json").exists(),
+        "vae_config": (models_dir / "sd-vae" / "config.json").exists(),
+        "vae_weights": (models_dir / "sd-vae" / "diffusion_pytorch_model.bin").exists(),
+        "whisper_model": (models_dir / "whisper" / "pytorch_model.bin").exists(),
+        "dwpose": (models_dir / "dwpose" / "dw-ll_ucoco_384.pth").exists(),
+        "face_parse": (models_dir / "face-parse-bisent" / "79999_iter.pth").exists(),
+    }
     return status

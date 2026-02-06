@@ -47,28 +47,6 @@ def main(argv: list[str] | None = None) -> None:
         help="Jaw boundary shift in pixels (default: 0)",
     )
     gen.add_argument(
-        "--face-restore",
-        action="store_true",
-        help="Apply CodeFormer face restoration",
-    )
-    gen.add_argument(
-        "--upscale",
-        action="store_true",
-        help="Apply Real-ESRGAN 4x upscaling",
-    )
-    gen.add_argument(
-        "--upscale-factor",
-        type=int,
-        default=4,
-        help="Upscale multiplier (default: 4)",
-    )
-    gen.add_argument(
-        "--restore-fidelity",
-        type=float,
-        default=0.7,
-        help="CodeFormer fidelity 0.0-1.0 (default: 0.7)",
-    )
-    gen.add_argument(
         "--batch-size",
         type=int,
         default=8,
@@ -85,17 +63,28 @@ def main(argv: list[str] | None = None) -> None:
         help="PyTorch device: auto, cuda, mps, cpu (default: auto)",
     )
     gen.add_argument(
-        "--model-dir",
-        default=None,
-        help="Custom model directory",
-    )
-    gen.add_argument(
-        "--crf",
+        "--extra-margin",
         type=int,
-        default=18,
-        help="Video quality 0-51, lower is better (default: 18)",
+        default=10,
+        help="Extra margin below jaw in pixels (default: 10)",
     )
     gen.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable verbose logging",
+    )
+
+    # --- setup command ---
+    setup_cmd = subparsers.add_parser(
+        "setup",
+        help="Full setup: clone MuseTalk repo, install dependencies, download models",
+    )
+    setup_cmd.add_argument(
+        "--no-deps",
+        action="store_true",
+        help="Skip installing MuseTalk dependencies",
+    )
+    setup_cmd.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose logging",
@@ -104,12 +93,7 @@ def main(argv: list[str] | None = None) -> None:
     # --- download-models command ---
     dl = subparsers.add_parser(
         "download-models",
-        help="Download all required model weights",
-    )
-    dl.add_argument(
-        "--model-dir",
-        default=None,
-        help="Custom model directory",
+        help="Clone MuseTalk repo and download all required model weights",
     )
     dl.add_argument(
         "--verbose", "-v",
@@ -121,11 +105,6 @@ def main(argv: list[str] | None = None) -> None:
     chk = subparsers.add_parser(
         "check",
         help="Check which models are downloaded",
-    )
-    chk.add_argument(
-        "--model-dir",
-        default=None,
-        help="Custom model directory",
     )
 
     args = parser.parse_args(argv)
@@ -144,7 +123,6 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "generate":
         from animated_talker.pipeline import generate
-        from pathlib import Path
 
         generate(
             image=args.image,
@@ -152,42 +130,40 @@ def main(argv: list[str] | None = None) -> None:
             output=args.output,
             fps=args.fps,
             bbox_shift=args.bbox_shift,
-            face_restore=args.face_restore,
-            upscale=args.upscale,
-            upscale_factor=args.upscale_factor,
-            restore_fidelity=args.restore_fidelity,
             batch_size=args.batch_size,
             use_float16=not args.no_float16,
             device=args.device,
-            model_dir=args.model_dir,
-            crf=args.crf,
+            extra_margin=args.extra_margin,
         )
 
-    elif args.command == "download-models":
-        from animated_talker.model_manager import ensure_models
-        from pathlib import Path
+    elif args.command == "setup":
+        from animated_talker.model_manager import setup_all
 
-        model_dir = Path(args.model_dir) if args.model_dir else None
-        paths = ensure_models(model_dir=model_dir)
-        print(f"Downloaded {len(paths)} model files:")
-        for key, path in paths.items():
-            print(f"  {key}: {path}")
+        install_deps = not args.no_deps
+        print("Running full setup (install_deps=%s)..." % install_deps)
+        musetalk_dir = setup_all(install_deps=install_deps)
+        print(f"Setup complete! MuseTalk at: {musetalk_dir}")
+
+    elif args.command == "download-models":
+        from animated_talker.model_manager import setup_all
+
+        print("Cloning MuseTalk repo and downloading models...")
+        musetalk_dir = setup_all(install_deps=False)
+        print(f"Done! MuseTalk at: {musetalk_dir}")
 
     elif args.command == "check":
-        from animated_talker.model_manager import verify_models
-        from pathlib import Path
+        from animated_talker.model_manager import verify_setup
 
-        model_dir = Path(args.model_dir) if args.model_dir else None
-        status = verify_models(model_dir=model_dir)
+        status = verify_setup()
         all_ok = all(status.values())
         for key, present in status.items():
             marker = "OK" if present else "MISSING"
             print(f"  [{marker}] {key}")
         if not all_ok:
-            print("\nRun 'animated-talker download-models' to download missing models.")
+            print("\nRun 'animated-talker setup' to download missing components.")
             sys.exit(1)
         else:
-            print("\nAll models present.")
+            print("\nAll components present.")
 
 
 if __name__ == "__main__":

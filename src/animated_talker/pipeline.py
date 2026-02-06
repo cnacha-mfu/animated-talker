@@ -7,10 +7,8 @@ from pathlib import Path
 
 import torch
 
-from animated_talker.input_handler import detect_face, load_audio, load_image
-from animated_talker.model_manager import ensure_models, get_model_dir
+from animated_talker.model_manager import setup_all
 from animated_talker.musetalk_engine import MuseTalkEngine
-from animated_talker.video_encoder import encode_video
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +30,14 @@ def generate(
     output: str | Path,
     fps: int = 25,
     bbox_shift: int = 0,
+    batch_size: int = 8,
+    use_float16: bool = True,
+    device: str = "auto",
+    extra_margin: int = 10,
     face_restore: bool = False,
     upscale: bool = False,
     upscale_factor: int = 4,
     restore_fidelity: float = 0.7,
-    batch_size: int = 8,
-    use_float16: bool = True,
-    device: str = "auto",
     model_dir: str | Path | None = None,
     crf: int = 18,
 ) -> Path:
@@ -53,14 +52,15 @@ def generate(
         output: Path for output video (MP4)
         fps: Video frame rate (default 25)
         bbox_shift: Jaw boundary adjustment (positive = more chin, default 0)
-        face_restore: Apply CodeFormer face restoration (requires postprocess extras)
-        upscale: Apply Real-ESRGAN 4x upscaling (requires postprocess extras)
+        batch_size: Frames per inference batch (default 8)
+        use_float16: Use FP16 for inference (default True, auto-disabled on CPU)
+        device: PyTorch device — "auto" (default), "cuda", "mps", or "cpu"
+        extra_margin: Extra margin below jaw in pixels (default 10)
+        face_restore: Apply CodeFormer face restoration (not yet supported)
+        upscale: Apply Real-ESRGAN upscaling (not yet supported)
         upscale_factor: Upscale multiplier (default 4)
         restore_fidelity: CodeFormer fidelity weight 0.0-1.0 (default 0.7)
-        batch_size: Frames per inference batch (default 8)
-        use_float16: Use FP16 for inference (default True, saves VRAM, auto-disabled on CPU)
-        device: PyTorch device — "auto" (default), "cuda", "mps", or "cpu"
-        model_dir: Custom model directory (default ~/.cache/animated_talker/models)
+        model_dir: Custom model directory (currently unused, reserved)
         crf: Video quality 0-51 (default 18, visually lossless)
 
     Returns:
@@ -79,58 +79,32 @@ def generate(
 
     logger.info("Using device: %s (float16=%s)", device, use_float16)
 
+    # Ensure MuseTalk repo is cloned and models are downloaded
+    logger.info("Setting up MuseTalk...")
+    setup_all(install_deps=False)
+
+    # Create engine and generate
+    logger.info("Loading models...")
+    engine = MuseTalkEngine(device=device, use_float16=use_float16)
+
     output = Path(output)
-    model_path = Path(model_dir) if model_dir else get_model_dir()
+    output.parent.mkdir(parents=True, exist_ok=True)
 
-    # Step 1: Ensure model weights are downloaded
-    logger.info("Checking model weights...")
-    ensure_models(model_dir=model_path)
-
-    # Step 2: Load and preprocess inputs
-    logger.info("Loading inputs...")
-    img = load_image(image)
-    face_crop, bbox = detect_face(img, bbox_shift=bbox_shift)
-    audio_wav, duration = load_audio(audio)
-
-    logger.info("Image: %s, Audio: %.2fs", Path(image).name, duration)
-
-    # Step 3: Generate lip-synced frames
-    engine = MuseTalkEngine(
-        model_dir=model_path,
-        device=device,
-        use_float16=use_float16,
-    )
-    frames = engine.generate_frames(
-        face_crop=face_crop,
-        original_frame=img,
-        bbox=bbox,
-        audio=audio_wav,
+    result = engine.generate(
+        image_path=str(image),
+        audio_path=str(audio),
+        output_path=str(output),
         fps=fps,
         batch_size=batch_size,
+        bbox_shift=bbox_shift,
+        extra_margin=extra_margin,
     )
 
-    # Step 4: Optional post-processing
     if face_restore or upscale:
-        from animated_talker.postprocess import restore_frames
-
-        frames = restore_frames(
-            frames,
-            face_restore=face_restore,
-            upscale=upscale,
-            device=device,
-            restore_fidelity=restore_fidelity,
-            upscale_factor=upscale_factor,
+        logger.warning(
+            "Post-processing (face_restore, upscale) is not yet supported "
+            "with the MuseTalk wrapper. Skipping."
         )
 
-    # Step 5: Encode video with audio
-    logger.info("Encoding video...")
-    result = encode_video(
-        frames=frames,
-        audio_path=audio,
-        output_path=output,
-        fps=fps,
-        crf=crf,
-    )
-
     logger.info("Done! Output: %s", result)
-    return result
+    return Path(result)
