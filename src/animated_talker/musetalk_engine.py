@@ -1,7 +1,8 @@
 """Thin wrapper around MuseTalk v1.5 inference pipeline.
 
 Uses MuseTalk's own code for model loading, audio processing,
-face detection, UNet inference, and face blending.
+UNet inference, and face blending. Face landmark detection uses
+face_alignment instead of mmpose to avoid the mmlab dependency.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import tempfile
 from pathlib import Path
 
 import cv2
+import face_alignment
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -22,6 +24,75 @@ from tqdm import tqdm
 from animated_talker.model_manager import ensure_musetalk_on_path, get_models_dir
 
 logger = logging.getLogger(__name__)
+
+# Placeholder for frames where no face is detected
+COORD_PLACEHOLDER = (0.0, 0.0, 0.0, 0.0)
+
+
+def _get_landmark_and_bbox(
+    img_list: list[str],
+    bbox_shift: int = 0,
+    device: str = "cuda",
+) -> tuple[list, list]:
+    """Detect face landmarks and compute bounding boxes.
+
+    Replaces MuseTalk's preprocessing.get_landmark_and_bbox which requires
+    mmpose. Uses face_alignment instead, which produces the same 68-point
+    face landmarks without the mmlab dependency.
+
+    Returns:
+        (coord_list, frame_list) matching MuseTalk's expected format.
+    """
+    fa = face_alignment.FaceAlignment(
+        face_alignment.LandmarksType.TWO_D,
+        flip_input=False,
+        device=device,
+    )
+
+    frames = []
+    logger.info("Reading %d images...", len(img_list))
+    for img_path in img_list:
+        frame = cv2.imread(img_path)
+        frames.append(frame)
+
+    coords_list = []
+
+    for frame in tqdm(frames, desc="Detecting faces"):
+        # face_alignment returns 68-point landmarks (same as COCO-WholeBody 23-90)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        preds = fa.get_landmarks(rgb)
+
+        if preds is None or len(preds) == 0:
+            coords_list.append(COORD_PLACEHOLDER)
+            continue
+
+        face_land_mark = preds[0].astype(np.int32)  # shape (68, 2)
+
+        # Compute half-face split using nose bridge landmarks (same as MuseTalk)
+        # face_land_mark[28], [29], [30] are nose bridge points
+        half_face_coord = face_land_mark[29].copy()
+
+        if bbox_shift != 0:
+            half_face_coord[1] = bbox_shift + half_face_coord[1]
+
+        half_face_dist = np.max(face_land_mark[:, 1]) - half_face_coord[1]
+        upper_bond = max(0, half_face_coord[1] - half_face_dist)
+
+        f_landmark = (
+            int(np.min(face_land_mark[:, 0])),
+            int(upper_bond),
+            int(np.max(face_land_mark[:, 0])),
+            int(np.max(face_land_mark[:, 1])),
+        )
+        x1, y1, x2, y2 = f_landmark
+
+        if y2 - y1 <= 0 or x2 - x1 <= 0 or x1 < 0:
+            coords_list.append(COORD_PLACEHOLDER)
+            logger.warning("Invalid bbox: %s", f_landmark)
+        else:
+            coords_list.append(f_landmark)
+
+    return coords_list, frames
 
 
 class MuseTalkEngine:
@@ -113,9 +184,6 @@ class MuseTalkEngine:
     ) -> str:
         """Generate lip-synced video from image + audio.
 
-        Uses MuseTalk's full pipeline: face detection, audio features,
-        UNet inference, face blending, and FFmpeg encoding.
-
         Args:
             image_path: Path to portrait image (JPEG/PNG)
             audio_path: Path to audio file (MP3/WAV)
@@ -152,7 +220,6 @@ class MuseTalkEngine:
         extra_margin: int,
     ) -> str:
         from musetalk.utils.utils import datagen
-        from musetalk.utils.preprocessing import get_landmark_and_bbox, coord_placeholder
         from musetalk.utils.blending import get_image
 
         # Create temp directories
@@ -174,7 +241,7 @@ class MuseTalkEngine:
             audio_data, sr = librosa.load(audio_path, sr=16000)
             duration = len(audio_data) / sr
             num_frames = int(duration * fps)
-            logger.info("Audio: %.2fs → %d frames at %d FPS", duration, num_frames, fps)
+            logger.info("Audio: %.2fs -> %d frames at %d FPS", duration, num_frames, fps)
 
             # Write frames (MuseTalk expects numbered PNGs)
             for i in range(num_frames):
@@ -199,16 +266,18 @@ class MuseTalkEngine:
             )
 
             # Step 3: Detect face landmarks and bounding boxes
+            # Uses face_alignment instead of mmpose (no mmlab dependency)
             logger.info("Detecting faces...")
-            coord_list, frame_list = get_landmark_and_bbox(
-                input_img_list, upperbondrange=bbox_shift
+            coord_list, frame_list = _get_landmark_and_bbox(
+                input_img_list, bbox_shift=bbox_shift,
+                device=str(self.device),
             )
 
             # Step 4: Encode cropped faces to VAE latents
             logger.info("Encoding face latents...")
             input_latent_list = []
             for bbox, frame in zip(coord_list, frame_list):
-                if bbox == coord_placeholder:
+                if bbox == COORD_PLACEHOLDER:
                     continue
                 x1, y1, x2, y2 = bbox
                 y2 = min(y2 + extra_margin, frame.shape[0])

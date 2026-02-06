@@ -104,22 +104,9 @@ def ensure_musetalk_deps() -> None:
         check=True,
     )
 
-    # Install mmlab packages (required for DWPose landmark detection).
-    # We avoid openmim which breaks setuptools/pkg_resources on Python 3.12.
-    # Use mmcv-lite (pure Python wheel, no compilation) since MuseTalk's
-    # DWPose inference doesn't need mmcv's custom CUDA kernels.
-    logger.info("Installing mmlab packages (mmengine, mmcv-lite, mmdet, mmpose)...")
-
-    mmlab_deps = [
-        "mmengine",
-        "mmcv-lite>=2.0.0,<2.2.0",
-        "mmdet>=3.1.0",
-        "mmpose>=1.1.0",
-    ]
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q"] + mmlab_deps,
-        check=True,
-    )
+    # Note: mmpose/mmcv/mmdet are NOT needed — we use face_alignment
+    # for face landmark detection instead (same 68-point landmarks,
+    # no mmlab dependency, works on any Python/PyTorch version).
 
 
 # Model files: (repo_id, hf_filename, local_path relative to models_dir)
@@ -134,8 +121,6 @@ MODEL_FILES: list[tuple[str, str, str]] = [
     ("openai/whisper-tiny", "config.json", "whisper/config.json"),
     ("openai/whisper-tiny", "pytorch_model.bin", "whisper/pytorch_model.bin"),
     ("openai/whisper-tiny", "preprocessor_config.json", "whisper/preprocessor_config.json"),
-    # DWPose
-    ("yzd-v/DWPose", "dw-ll_ucoco_384.pth", "dwpose/dw-ll_ucoco_384.pth"),
     # Face parsing
     ("ManyOtherFunctions/face-parse-bisent", "79999_iter.pth", "face-parse-bisent/79999_iter.pth"),
     ("ManyOtherFunctions/face-parse-bisent", "resnet18-5c106cde.pth", "face-parse-bisent/resnet18-5c106cde.pth"),
@@ -199,7 +184,6 @@ def verify_setup() -> dict[str, bool]:
         "vae_config": (models_dir / "sd-vae" / "config.json").exists(),
         "vae_weights": (models_dir / "sd-vae" / "diffusion_pytorch_model.bin").exists(),
         "whisper_model": (models_dir / "whisper" / "pytorch_model.bin").exists(),
-        "dwpose": (models_dir / "dwpose" / "dw-ll_ucoco_384.pth").exists(),
         "face_parse": (models_dir / "face-parse-bisent" / "79999_iter.pth").exists(),
     }
     return status
