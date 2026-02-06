@@ -152,7 +152,7 @@ class MuseTalkEngine:
         # Load UNet
         musetalk_dir = self.model_dir / "musetalk"
         config_path = musetalk_dir / "musetalk.json"
-        weights_path = musetalk_dir / "pytorch_model.bin"
+        weights_path = musetalk_dir / "unet.pth"
 
         self.unet = UNet2DConditionModel.from_config(str(config_path))
         state_dict = torch.load(str(weights_path), map_location="cpu", weights_only=True)
