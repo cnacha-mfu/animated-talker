@@ -75,33 +75,24 @@ def ensure_musetalk_deps() -> None:
         )
 
 
-# Model files to download: (repo_id, filename)
-HF_DOWNLOADS: list[tuple[str, str]] = [
+# Model files: (repo_id, hf_filename, local_path relative to models_dir)
+MODEL_FILES: list[tuple[str, str, str]] = [
     # MuseTalk v1.5 UNet
-    ("TMElyralab/MuseTalk", "musetalkV15/musetalk.json"),
-    ("TMElyralab/MuseTalk", "musetalkV15/unet.pth"),
+    ("TMElyralab/MuseTalk", "musetalkV15/musetalk.json", "musetalkV15/musetalk.json"),
+    ("TMElyralab/MuseTalk", "musetalkV15/unet.pth", "musetalkV15/unet.pth"),
     # SD VAE
-    ("stabilityai/sd-vae-ft-mse", "config.json"),
-    ("stabilityai/sd-vae-ft-mse", "diffusion_pytorch_model.bin"),
+    ("stabilityai/sd-vae-ft-mse", "config.json", "sd-vae/config.json"),
+    ("stabilityai/sd-vae-ft-mse", "diffusion_pytorch_model.bin", "sd-vae/diffusion_pytorch_model.bin"),
     # Whisper tiny
-    ("openai/whisper-tiny", "config.json"),
-    ("openai/whisper-tiny", "pytorch_model.bin"),
-    ("openai/whisper-tiny", "preprocessor_config.json"),
+    ("openai/whisper-tiny", "config.json", "whisper/config.json"),
+    ("openai/whisper-tiny", "pytorch_model.bin", "whisper/pytorch_model.bin"),
+    ("openai/whisper-tiny", "preprocessor_config.json", "whisper/preprocessor_config.json"),
     # DWPose
-    ("yzd-v/DWPose", "dw-ll_ucoco_384.pth"),
+    ("yzd-v/DWPose", "dw-ll_ucoco_384.pth", "dwpose/dw-ll_ucoco_384.pth"),
     # Face parsing
-    ("ManyOtherFunctions/face-parse-bisent", "79999_iter.pth"),
-    ("ManyOtherFunctions/face-parse-bisent", "resnet18-5c106cde.pth"),
+    ("ManyOtherFunctions/face-parse-bisent", "79999_iter.pth", "face-parse-bisent/79999_iter.pth"),
+    ("ManyOtherFunctions/face-parse-bisent", "resnet18-5c106cde.pth", "face-parse-bisent/resnet18-5c106cde.pth"),
 ]
-
-# Map HuggingFace paths to local model subdirectory
-LOCAL_DIR_MAP: dict[str, str] = {
-    "TMElyralab/MuseTalk": "",  # Files already have musetalkV15/ prefix
-    "stabilityai/sd-vae-ft-mse": "sd-vae",
-    "openai/whisper-tiny": "whisper",
-    "yzd-v/DWPose": "dwpose",
-    "ManyOtherFunctions/face-parse-bisent": "face-parse-bisent",
-}
 
 
 def ensure_models() -> Path:
@@ -109,32 +100,19 @@ def ensure_models() -> Path:
     models_dir = get_models_dir()
     models_dir.mkdir(parents=True, exist_ok=True)
 
-    for repo_id, filename in HF_DOWNLOADS:
-        local_subdir = LOCAL_DIR_MAP[repo_id]
-        if local_subdir:
-            target_dir = models_dir / local_subdir
-        else:
-            target_dir = models_dir
-
-        target_file = target_dir / Path(filename).name
+    for repo_id, hf_filename, local_path in MODEL_FILES:
+        target_file = models_dir / local_path
         if target_file.exists():
             logger.debug("Already exists: %s", target_file)
             continue
 
-        target_dir.mkdir(parents=True, exist_ok=True)
-        logger.info("Downloading %s/%s ...", repo_id, filename)
-        downloaded = hf_hub_download(
-            repo_id=repo_id,
-            filename=filename,
-            local_dir=target_dir,
-            local_dir_use_symlinks=False,
-        )
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        logger.info("Downloading %s/%s ...", repo_id, hf_filename)
 
-        # hf_hub_download may nest files — move to expected flat location
-        downloaded_path = Path(downloaded)
-        if downloaded_path != target_file and downloaded_path.exists():
-            target_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(downloaded_path), str(target_file))
+        # Download to HF cache, then copy to target location
+        cached = hf_hub_download(repo_id=repo_id, filename=hf_filename)
+        shutil.copy2(cached, target_file)
+        logger.info("  → %s", target_file)
 
     logger.info("All models downloaded to %s", models_dir)
     return models_dir
