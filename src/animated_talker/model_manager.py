@@ -16,12 +16,12 @@ DEFAULT_MODEL_DIR = Path.home() / ".cache" / "animated_talker" / "models"
 HF_MODELS: dict[str, tuple[str, str, str]] = {
     "musetalk_config": (
         "TMElyralab/MuseTalk",
-        "models/musetalk/musetalk.json",
+        "musetalkV15/musetalk.json",
         "musetalk",
     ),
     "musetalk_unet": (
         "TMElyralab/MuseTalk",
-        "models/musetalk/pytorch_model.bin",
+        "musetalkV15/unet.pth",
         "musetalk",
     ),
     "sd_vae_config": (
@@ -50,13 +50,13 @@ HF_MODELS: dict[str, tuple[str, str, str]] = {
         "whisper-tiny",
     ),
     "face_parse_bisenet": (
-        "TMElyralab/MuseTalk",
-        "models/face-parse-bisent/79999_iter.pth",
+        "ManyOtherFunctions/face-parse-bisent",
+        "79999_iter.pth",
         "face-parse-bisenet",
     ),
     "face_parse_resnet": (
-        "TMElyralab/MuseTalk",
-        "models/face-parse-bisent/resnet18-5c106cde.pth",
+        "ManyOtherFunctions/face-parse-bisent",
+        "resnet18-5c106cde.pth",
         "face-parse-bisenet",
     ),
 }
