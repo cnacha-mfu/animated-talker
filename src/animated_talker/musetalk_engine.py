@@ -62,7 +62,7 @@ class FaceParser:
         from animated_talker._bisenet import BiSeNet
 
         self.model = BiSeNet(n_classes=19, pretrained_resnet=resnet_path)
-        state_dict = torch.load(bisenet_path, map_location=self.device, weights_only=True)
+        state_dict = torch.load(bisenet_path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(state_dict)
         self.model.to(self.device)
         self.model.eval()
@@ -155,7 +155,7 @@ class MuseTalkEngine:
         weights_path = musetalk_dir / "unet.pth"
 
         self.unet = UNet2DConditionModel.from_config(str(config_path))
-        state_dict = torch.load(str(weights_path), map_location="cpu", weights_only=True)
+        state_dict = torch.load(str(weights_path), map_location="cpu", weights_only=False)
         self.unet.load_state_dict(state_dict)
         self.unet = self.unet.to(self.device, dtype=self.dtype)
         self.unet.eval()
