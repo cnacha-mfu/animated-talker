@@ -7,6 +7,8 @@ These modules require the 'postprocess' optional dependency group:
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 
 import cv2
@@ -209,3 +211,72 @@ def restore_frames(
 
     logger.info("Post-processing complete (%d frames)", len(processed))
     return processed
+
+
+def postprocess_video(
+    input_path: str | Path,
+    output_path: str | Path,
+    audio_path: str | Path,
+    face_restore: bool = False,
+    upscale: bool = False,
+    device: str = "cuda",
+    restore_fidelity: float = 0.7,
+    upscale_factor: int = 4,
+    fps: int = 25,
+) -> Path:
+    """Post-process an existing video: extract frames, enhance, re-encode.
+
+    Args:
+        input_path: Path to input video (MP4)
+        output_path: Path for output video (MP4)
+        audio_path: Path to original audio for re-muxing
+        face_restore: Apply CodeFormer face restoration
+        upscale: Apply Real-ESRGAN upscaling
+        device: PyTorch device
+        restore_fidelity: CodeFormer fidelity weight
+        upscale_factor: Upscale multiplier
+        fps: Video frame rate
+
+    Returns:
+        Path to the output video file
+    """
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    # Extract frames from video
+    logger.info("Extracting frames from %s for post-processing...", input_path.name)
+    cap = cv2.VideoCapture(str(input_path))
+    frames = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames.append(frame)
+    cap.release()
+
+    if not frames:
+        raise ValueError(f"No frames extracted from {input_path}")
+
+    logger.info("Extracted %d frames", len(frames))
+
+    # Apply post-processing
+    frames = restore_frames(
+        frames,
+        face_restore=face_restore,
+        upscale=upscale,
+        device=device,
+        restore_fidelity=restore_fidelity,
+        upscale_factor=upscale_factor,
+    )
+
+    # Re-encode with FFmpeg
+    from animated_talker.video_encoder import encode_video
+
+    encode_video(
+        frames=frames,
+        audio_path=audio_path,
+        output_path=output_path,
+        fps=fps,
+    )
+
+    return output_path

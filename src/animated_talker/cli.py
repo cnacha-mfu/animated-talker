@@ -41,10 +41,28 @@ def main(argv: list[str] | None = None) -> None:
         help="Video frame rate (default: 25)",
     )
     gen.add_argument(
-        "--bbox-shift",
+        "--emotion",
         type=int,
-        default=0,
-        help="Jaw boundary shift in pixels (default: 0)",
+        default=4,
+        help="Emotion style index 0-8 (default: 4 = neutral)",
+    )
+    gen.add_argument(
+        "--sampling-timesteps",
+        type=int,
+        default=50,
+        help="Diffusion denoising steps (default: 50, lower = faster)",
+    )
+    gen.add_argument(
+        "--fade-in",
+        type=int,
+        default=-1,
+        help="Frames to fade in at start (-1 = disabled)",
+    )
+    gen.add_argument(
+        "--fade-out",
+        type=int,
+        default=-1,
+        help="Frames to fade out at end (-1 = disabled)",
     )
     gen.add_argument(
         "--face-restore",
@@ -54,7 +72,7 @@ def main(argv: list[str] | None = None) -> None:
     gen.add_argument(
         "--upscale",
         action="store_true",
-        help="Apply Real-ESRGAN 4x upscaling",
+        help="Apply Real-ESRGAN upscaling",
     )
     gen.add_argument(
         "--upscale-factor",
@@ -67,12 +85,6 @@ def main(argv: list[str] | None = None) -> None:
         type=float,
         default=0.7,
         help="CodeFormer fidelity 0.0-1.0 (default: 0.7)",
-    )
-    gen.add_argument(
-        "--batch-size",
-        type=int,
-        default=8,
-        help="Frames per inference batch (default: 8)",
     )
     gen.add_argument(
         "--no-float16",
@@ -90,12 +102,6 @@ def main(argv: list[str] | None = None) -> None:
         help="Custom model directory",
     )
     gen.add_argument(
-        "--crf",
-        type=int,
-        default=18,
-        help="Video quality 0-51, lower is better (default: 18)",
-    )
-    gen.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose logging",
@@ -104,7 +110,7 @@ def main(argv: list[str] | None = None) -> None:
     # --- download-models command ---
     dl = subparsers.add_parser(
         "download-models",
-        help="Download all required model weights",
+        help="Download all required model weights and clone the Ditto repo",
     )
     dl.add_argument(
         "--model-dir",
@@ -144,23 +150,23 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "generate":
         from animated_talker.pipeline import generate
-        from pathlib import Path
 
         generate(
             image=args.image,
             audio=args.audio,
             output=args.output,
             fps=args.fps,
-            bbox_shift=args.bbox_shift,
+            emotion=args.emotion,
+            sampling_timesteps=args.sampling_timesteps,
+            fade_in=args.fade_in,
+            fade_out=args.fade_out,
             face_restore=args.face_restore,
             upscale=args.upscale,
             upscale_factor=args.upscale_factor,
             restore_fidelity=args.restore_fidelity,
-            batch_size=args.batch_size,
             use_float16=not args.no_float16,
             device=args.device,
             model_dir=args.model_dir,
-            crf=args.crf,
         )
 
     elif args.command == "download-models":
@@ -169,7 +175,7 @@ def main(argv: list[str] | None = None) -> None:
 
         model_dir = Path(args.model_dir) if args.model_dir else None
         paths = ensure_models(model_dir=model_dir)
-        print(f"Downloaded {len(paths)} model files:")
+        print(f"Downloaded {len(paths)} items:")
         for key, path in paths.items():
             print(f"  {key}: {path}")
 

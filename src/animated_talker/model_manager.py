@@ -1,63 +1,71 @@
-"""Download and manage model weights from HuggingFace Hub."""
+"""Download and manage Ditto-TalkingHead model weights and repository."""
 
 from __future__ import annotations
 
 import logging
 import os
+import shutil
+import subprocess
 from pathlib import Path
-
-from huggingface_hub import hf_hub_download
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_DIR = Path.home() / ".cache" / "animated_talker" / "models"
+DITTO_REPO_URL = "https://github.com/antgroup/ditto-talkinghead.git"
+DITTO_HF_REPO = "digital-avatar/ditto-talkinghead"
 
-# (repo_id, filename, subfolder in local cache)
-HF_MODELS: dict[str, tuple[str, str, str]] = {
-    "musetalk_config": (
-        "TMElyralab/MuseTalk",
-        "musetalkV15/musetalk.json",
-        "musetalk",
+# Ditto PyTorch model files to download from HuggingFace
+# (HF filename relative to repo root, local subfolder)
+DITTO_MODELS: dict[str, tuple[str, str]] = {
+    "appearance_extractor": (
+        "ditto_pytorch/appearance_extractor.pth",
+        "ditto_pytorch",
     ),
-    "musetalk_unet": (
-        "TMElyralab/MuseTalk",
-        "musetalkV15/unet.pth",
-        "musetalk",
+    "decoder": (
+        "ditto_pytorch/decoder.pth",
+        "ditto_pytorch",
     ),
-    "sd_vae_config": (
-        "stabilityai/sd-vae-ft-mse",
-        "config.json",
-        "sd-vae-ft-mse",
+    "lmdm": (
+        "ditto_pytorch/lmdm_v0.4_hubert.pth",
+        "ditto_pytorch",
     ),
-    "sd_vae_weights": (
-        "stabilityai/sd-vae-ft-mse",
-        "diffusion_pytorch_model.safetensors",
-        "sd-vae-ft-mse",
+    "motion_extractor": (
+        "ditto_pytorch/motion_extractor.pth",
+        "ditto_pytorch",
     ),
-    "whisper_tiny": (
-        "openai/whisper-tiny",
-        "model.safetensors",
-        "whisper-tiny",
+    "stitch_network": (
+        "ditto_pytorch/stitch_network.pth",
+        "ditto_pytorch",
     ),
-    "whisper_config": (
-        "openai/whisper-tiny",
-        "config.json",
-        "whisper-tiny",
+    "warp_network": (
+        "ditto_pytorch/warp_network.pth",
+        "ditto_pytorch",
     ),
-    "whisper_preprocessor": (
-        "openai/whisper-tiny",
-        "preprocessor_config.json",
-        "whisper-tiny",
+    # ONNX models for audio and face detection
+    "hubert_onnx": (
+        "ditto_onnx/hubert_streaming_fix_kv.onnx",
+        "ditto_onnx",
     ),
-    "face_parse_bisenet": (
-        "ManyOtherFunctions/face-parse-bisent",
-        "79999_iter.pth",
-        "face-parse-bisenet",
+    "face_det_10g": (
+        "ditto_onnx/det_10g.onnx",
+        "ditto_onnx",
     ),
-    "face_parse_resnet": (
-        "ManyOtherFunctions/face-parse-bisent",
-        "resnet18-5c106cde.pth",
-        "face-parse-bisenet",
+    "face_2d106det": (
+        "ditto_onnx/2d106det.onnx",
+        "ditto_onnx",
+    ),
+    "face_landmarker": (
+        "ditto_onnx/face_landmarker.task",
+        "ditto_onnx",
+    ),
+    "landmark203": (
+        "ditto_onnx/landmark203.onnx",
+        "ditto_onnx",
+    ),
+    # Config
+    "cfg_pytorch": (
+        "ditto_cfg/v0.4_hubert_cfg_pytorch.pkl",
+        "ditto_cfg",
     ),
 }
 
@@ -70,17 +78,55 @@ def get_model_dir() -> Path:
     return DEFAULT_MODEL_DIR
 
 
+def get_ditto_repo_dir(model_dir: Path | None = None) -> Path:
+    """Return the path where the Ditto repo is/should be cloned."""
+    if model_dir is None:
+        model_dir = get_model_dir()
+    return model_dir / "ditto-talkinghead"
+
+
 def get_model_path(model_key: str, model_dir: Path | None = None) -> Path:
     """Return the expected local path for a model file."""
     if model_dir is None:
         model_dir = get_model_dir()
-    _, filename, subfolder = HF_MODELS[model_key]
-    basename = Path(filename).name
+    hf_filename, subfolder = DITTO_MODELS[model_key]
+    basename = Path(hf_filename).name
     return model_dir / subfolder / basename
+
+
+def clone_ditto_repo(model_dir: Path | None = None) -> Path:
+    """Clone the Ditto-TalkingHead repository if not already present."""
+    if model_dir is None:
+        model_dir = get_model_dir()
+
+    repo_dir = get_ditto_repo_dir(model_dir)
+    if repo_dir.exists() and (repo_dir / "inference.py").exists():
+        logger.debug("Ditto repo already cloned at %s", repo_dir)
+        return repo_dir
+
+    repo_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Cloning Ditto-TalkingHead repo to %s ...", repo_dir)
+    result = subprocess.run(
+        ["git", "clone", "--depth", "1", DITTO_REPO_URL, str(repo_dir)],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Failed to clone Ditto repo:\n{result.stderr}\n"
+            f"Ensure git is installed and you have internet access."
+        )
+
+    logger.info("Ditto repo cloned successfully")
+    return repo_dir
 
 
 def download_model(model_key: str, model_dir: Path | None = None) -> Path:
     """Download a single model file if not already present. Returns local path."""
+    from huggingface_hub import hf_hub_download
+
     if model_dir is None:
         model_dir = get_model_dir()
 
@@ -89,23 +135,22 @@ def download_model(model_key: str, model_dir: Path | None = None) -> Path:
         logger.debug("Model %s already exists at %s", model_key, local_path)
         return local_path
 
-    repo_id, filename, subfolder = HF_MODELS[model_key]
+    hf_filename, subfolder = DITTO_MODELS[model_key]
     local_path.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Downloading %s from %s ...", model_key, repo_id)
+    logger.info("Downloading %s from %s ...", model_key, DITTO_HF_REPO)
     downloaded = hf_hub_download(
-        repo_id=repo_id,
-        filename=filename,
-        local_dir=model_dir / subfolder,
+        repo_id=DITTO_HF_REPO,
+        filename=hf_filename,
+        local_dir=model_dir / "_hf_download",
         local_dir_use_symlinks=False,
     )
 
-    # hf_hub_download may place the file in a nested path matching the repo structure.
-    # Move it to our expected flat location if needed.
+    # Move to our expected location
     downloaded_path = Path(downloaded)
     if downloaded_path != local_path and downloaded_path.exists():
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        downloaded_path.rename(local_path)
+        shutil.copy2(str(downloaded_path), str(local_path))
 
     logger.info("Downloaded %s to %s", model_key, local_path)
     return local_path
@@ -113,14 +158,24 @@ def download_model(model_key: str, model_dir: Path | None = None) -> Path:
 
 def ensure_models(
     model_dir: Path | None = None,
-    include_postprocess: bool = False,
+    include_repo: bool = True,
 ) -> dict[str, Path]:
-    """Download all required models. Returns dict of model_key -> local_path."""
+    """Download all required models and clone the Ditto repo.
+
+    Returns dict of model_key -> local_path.
+    """
     if model_dir is None:
         model_dir = get_model_dir()
 
-    paths = {}
-    for key in HF_MODELS:
+    paths: dict[str, Path] = {}
+
+    # Clone the Ditto repo (needed for inference code)
+    if include_repo:
+        repo_dir = clone_ditto_repo(model_dir)
+        paths["ditto_repo"] = repo_dir
+
+    # Download model weights
+    for key in DITTO_MODELS:
         paths[key] = download_model(key, model_dir)
 
     return paths
@@ -131,8 +186,15 @@ def verify_models(model_dir: Path | None = None) -> dict[str, bool]:
     if model_dir is None:
         model_dir = get_model_dir()
 
-    status = {}
-    for key in HF_MODELS:
+    status: dict[str, bool] = {}
+
+    # Check repo
+    repo_dir = get_ditto_repo_dir(model_dir)
+    status["ditto_repo"] = repo_dir.exists() and (repo_dir / "inference.py").exists()
+
+    # Check model files
+    for key in DITTO_MODELS:
         path = get_model_path(key, model_dir)
         status[key] = path.exists()
+
     return status

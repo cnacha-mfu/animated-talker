@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "animated-talker"
-version = "0.1.0"
+version = "0.2.0"
 description = "Generate lip-synced talking avatar videos from a portrait image and audio file"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10,<3.13"
 authors = [{ name = "Animated Talker Contributors" }]
-keywords = ["lip-sync", "talking-head", "avatar", "video-generation", "musetalk"]
+keywords = ["lip-sync", "talking-head", "avatar", "video-generation", "ditto"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -26,15 +26,16 @@ classifiers = [
 dependencies = [
     "torch>=2.0",
     "torchvision>=0.15",
-    "diffusers>=0.25",
-    "transformers>=4.36",
     "opencv-python>=4.9",
     "numpy>=1.23",
     "librosa>=0.10",
     "Pillow>=9.0",
     "huggingface-hub>=0.20",
-    "face-alignment>=1.4",
     "tqdm>=4.60",
+    "onnxruntime>=1.16",
+    "imageio>=2.34",
+    "imageio-ffmpeg>=0.5",
+    "scikit-image>=0.22",
 ]
 
 [project.optional-dependencies]

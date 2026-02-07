@@ -48,6 +48,10 @@ def test_check_ffmpeg():
             check_ffmpeg()
 
 
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None,
+    reason="FFmpeg not installed",
+)
 def test_encode_video_empty_frames(tmp_path):
     """Test that empty frame list raises ValueError."""
     from animated_talker.video_encoder import encode_video

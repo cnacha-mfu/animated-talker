@@ -1,20 +1,20 @@
 # PRD: Animated Talker — Lip-Sync Talking Avatar Video Generator
 
-**Version:** 2.0
-**Date:** 2026-02-06
+**Version:** 3.0
+**Date:** 2026-02-07
 **Status:** Draft
 
 ---
 
 ## 1. Executive Summary
 
-Animated Talker is a Python library and CLI tool that generates lip-synced talking avatar videos from a single portrait image and an audio file (MP3/WAV). The system uses MuseTalk v1.5 for lip-sync generation with optional post-processing for quality enhancement. Fully self-hosted and open-source.
+Animated Talker is a Python library and CLI tool that generates lip-synced talking avatar videos from a single portrait image and an audio file (MP3/WAV). The system uses Ditto-TalkingHead for audio-driven talking head synthesis with optional post-processing for quality enhancement. Fully self-hosted and open-source.
 
 ---
 
 ## 2. Problem Statement
 
-Creating talking-head videos from a still portrait and audio requires stitching together multiple ML models (face detection, lip sync, video encoding) with significant glue code. There is no simple, production-ready Python tool that takes an image + audio and outputs a lip-synced video in one call.
+Creating talking-head videos from a still portrait and audio requires stitching together multiple ML models (face detection, audio encoding, motion generation, neural rendering, video encoding) with significant glue code. There is no simple, production-ready Python tool that takes an image + audio and outputs a lip-synced video in one call.
 
 ---
 
@@ -25,22 +25,22 @@ Creating talking-head videos from a still portrait and audio requires stitching 
 | # | Goal |
 |---|------|
 | G1 | Single image + audio → lip-synced video in one function call |
-| G2 | Accurate lip sync using MuseTalk v1.5 |
-| G3 | Optional face restoration (CodeFormer) and upscaling (Real-ESRGAN) |
-| G4 | Simple Python API: `generate(image, audio, output)` |
-| G5 | CLI for non-developers |
-| G6 | Auto-download model weights from HuggingFace Hub |
-| G7 | Self-hosted, no external API calls |
+| G2 | High-quality lip sync using Ditto-TalkingHead (diffusion-based) |
+| G3 | Controllable emotion, head pose, and gaze |
+| G4 | Optional face restoration (CodeFormer) and upscaling (Real-ESRGAN) |
+| G5 | Simple Python API: `generate(image, audio, output)` |
+| G6 | CLI for non-developers |
+| G7 | Auto-download model weights from HuggingFace Hub |
+| G8 | Self-hosted, no external API calls |
 
 ### Non-Goals
 
 - Text-to-speech (TTS) — user provides audio
 - Voice cloning
-- Real-time streaming
+- Real-time streaming (future consideration)
 - Web UI
-- Plugin/backend abstraction system
 - Training custom models
-- Full-body animation
+- Full-body animation (Ditto supports head-to-body stitching but not full body)
 
 ---
 
@@ -51,20 +51,17 @@ avatar.png + speech.mp3
         │
         ▼
   ┌─────────────┐
-  │ Input Handler│  Face detection, alignment, audio loading
+  │  Validation  │  Verify image & audio are readable
   └──────┬──────┘
          ▼
   ┌─────────────┐
-  │  MuseTalk   │  Audio features → lip-synced frames
-  │  v1.5       │  (single-step latent inpainting)
+  │   Ditto     │  HuBERT audio encoding
+  │ TalkingHead │  → LMDM diffusion motion generation
+  │             │  → Neural rendering & compositing
   └──────┬──────┘
          ▼
   ┌─────────────┐
   │ Post-Process│  (optional) CodeFormer + Real-ESRGAN
-  └──────┬──────┘
-         ▼
-  ┌─────────────┐
-  │ Video Encode│  FFmpeg H.264 + audio mux
   └──────┬──────┘
          ▼
     output.mp4
@@ -88,18 +85,19 @@ generate(
     audio="speech.mp3",
     output="result.mp4",
     fps=25,
-    face_restore=True,      # CodeFormer
-    upscale=True,            # Real-ESRGAN 4x
-    bbox_shift=0,            # Jaw boundary adjustment
+    emotion=4,               # Emotion style (0-8)
+    sampling_timesteps=50,    # Diffusion steps
+    face_restore=True,        # CodeFormer
+    upscale=True,             # Real-ESRGAN
 )
 ```
 
 ### CLI
 
 ```bash
-animated-talker --image avatar.png --audio speech.mp3 --output result.mp4
-animated-talker --image avatar.png --audio speech.mp3 --output result.mp4 --face-restore --upscale
-animated-talker download-models  # Pre-download all weights
+animated-talker generate --image avatar.png --audio speech.mp3 --output result.mp4
+animated-talker generate --image avatar.png --audio speech.mp3 --output result.mp4 --emotion 2
+animated-talker download-models  # Pre-download all weights + clone Ditto repo
 ```
 
 ---
@@ -121,17 +119,22 @@ animated-talker download-models  # Pre-download all weights
 | PyTorch ≥ 2.0 | Model inference |
 | CUDA ≥ 11.8 | GPU acceleration |
 | FFmpeg ≥ 5.0 | Video encoding |
+| Git | Clone Ditto repo |
 
-### Model Weights (~2.5 GB)
+### Model Weights (~6.9 GB)
 
-| Model | Size | License |
-|-------|------|---------|
-| MuseTalk v1.5 (UNet + config) | ~900 MB | MIT |
-| SD VAE (ft-mse) | ~330 MB | MIT |
-| Whisper tiny | ~150 MB | MIT |
-| Face parsing (BiSeNet) | ~50 MB | MIT |
-| CodeFormer (optional) | ~350 MB | Apache 2.0 |
-| Real-ESRGAN (optional) | ~64 MB | BSD-3 |
+| Model | Purpose | License |
+|-------|---------|---------|
+| Ditto LMDM (v0.4 HuBERT) | Audio → motion diffusion | Apache-2.0 |
+| Appearance Extractor | Identity features | Apache-2.0 |
+| Motion Extractor | Motion parameters | Apache-2.0 |
+| Warp Network | 3D mesh warping | Apache-2.0 |
+| Decoder | Neural rendering | Apache-2.0 |
+| Stitch Network | Head-to-body compositing | Apache-2.0 |
+| HuBERT ONNX | Audio feature extraction | Apache-2.0 |
+| Face detection ONNX | Face detection & landmarks | Non-commercial (InsightFace) |
+| CodeFormer (optional) | Face restoration | Apache-2.0 |
+| Real-ESRGAN (optional) | Super-resolution | BSD-3 |
 
 ---
 
@@ -143,20 +146,21 @@ animated-talker/
 ├── src/animated_talker/
 │   ├── __init__.py          # Public API
 │   ├── pipeline.py          # Orchestrator
-│   ├── input_handler.py     # Image + audio loading, face detection
-│   ├── musetalk_engine.py   # MuseTalk v1.5 inference
+│   ├── ditto_engine.py      # Ditto-TalkingHead inference engine
+│   ├── input_handler.py     # Input validation
 │   ├── video_encoder.py     # FFmpeg encoding + audio mux
 │   ├── postprocess.py       # CodeFormer + Real-ESRGAN
-│   └── model_manager.py     # Model weight downloads
+│   └── model_manager.py     # Model weight + repo downloads
 ├── tests/
+│   ├── test_pipeline.py
 │   ├── test_input_handler.py
-│   ├── test_video_encoder.py
-│   └── test_pipeline.py
-└── cli.py                   # CLI entry point
+│   ├── test_model_manager.py
+│   └── test_video_encoder.py
+└── README.md
 ```
 
 ---
 
 ## 8. Licensing
 
-MIT License for the library. Default models (MuseTalk, SD VAE, Whisper, CodeFormer, Real-ESRGAN) are all permissively licensed for commercial use.
+MIT License for the library. Ditto-TalkingHead is Apache-2.0 licensed. Note: InsightFace models used for face detection have a non-commercial license, which may restrict commercial use.

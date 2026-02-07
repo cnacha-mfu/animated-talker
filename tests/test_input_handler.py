@@ -4,6 +4,20 @@ import numpy as np
 import pytest
 
 
+def test_validate_image_missing_file():
+    from animated_talker.input_handler import validate_image
+
+    with pytest.raises(FileNotFoundError):
+        validate_image("/nonexistent/path/image.png")
+
+
+def test_validate_audio_missing_file():
+    from animated_talker.input_handler import validate_audio
+
+    with pytest.raises(FileNotFoundError):
+        validate_audio("/nonexistent/path/audio.mp3")
+
+
 def test_load_image_missing_file():
     from animated_talker.input_handler import load_image
 
@@ -18,13 +32,27 @@ def test_load_audio_missing_file():
         load_audio("/nonexistent/path/audio.mp3")
 
 
+def test_validate_image_valid(tmp_path):
+    """Test validating a valid image file."""
+    import cv2
+
+    img = np.zeros((256, 256, 3), dtype=np.uint8)
+    img[50:200, 50:200] = 255
+    img_path = tmp_path / "test.png"
+    cv2.imwrite(str(img_path), img)
+
+    from animated_talker.input_handler import validate_image
+
+    # Should not raise
+    validate_image(str(img_path))
+
+
 def test_load_image_returns_ndarray(tmp_path):
     """Test loading a valid image file."""
     import cv2
 
-    # Create a simple test image
     img = np.zeros((256, 256, 3), dtype=np.uint8)
-    img[50:200, 50:200] = 255  # White square
+    img[50:200, 50:200] = 255
     img_path = tmp_path / "test.png"
     cv2.imwrite(str(img_path), img)
 
@@ -39,7 +67,6 @@ def test_load_audio_returns_waveform(tmp_path):
     """Test loading a valid WAV file."""
     import soundfile as sf
 
-    # Create a simple test audio (1 second of silence)
     sr = 16000
     audio = np.zeros(sr, dtype=np.float32)
     audio_path = tmp_path / "test.wav"

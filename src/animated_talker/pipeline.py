@@ -7,10 +7,9 @@ from pathlib import Path
 
 import torch
 
-from animated_talker.input_handler import detect_face, load_audio, load_image
+from animated_talker.input_handler import validate_image, validate_audio
 from animated_talker.model_manager import ensure_models, get_model_dir
-from animated_talker.musetalk_engine import MuseTalkEngine
-from animated_talker.video_encoder import encode_video
+from animated_talker.ditto_engine import DittoEngine
 
 logger = logging.getLogger(__name__)
 
@@ -31,37 +30,40 @@ def generate(
     audio: str | Path,
     output: str | Path,
     fps: int = 25,
-    bbox_shift: int = 0,
+    emotion: int = 4,
+    sampling_timesteps: int = 50,
+    fade_in: int = -1,
+    fade_out: int = -1,
     face_restore: bool = False,
     upscale: bool = False,
     upscale_factor: int = 4,
     restore_fidelity: float = 0.7,
-    batch_size: int = 8,
     use_float16: bool = True,
     device: str = "auto",
     model_dir: str | Path | None = None,
-    crf: int = 18,
 ) -> Path:
     """Generate a lip-synced talking avatar video.
 
     Takes a portrait image and an audio file, generates lip-synced frames
-    using MuseTalk v1.5, and encodes them into a video with the original audio.
+    using Ditto-TalkingHead, and encodes them into a video with the original
+    audio.
 
     Args:
         image: Path to portrait image (JPEG/PNG)
         audio: Path to audio file (MP3/WAV)
         output: Path for output video (MP4)
         fps: Video frame rate (default 25)
-        bbox_shift: Jaw boundary adjustment (positive = more chin, default 0)
+        emotion: Emotion style index 0-8 (default 4 = neutral)
+        sampling_timesteps: Diffusion denoising steps (default 50, lower = faster)
+        fade_in: Number of frames to fade in at start (-1 = disabled)
+        fade_out: Number of frames to fade out at end (-1 = disabled)
         face_restore: Apply CodeFormer face restoration (requires postprocess extras)
-        upscale: Apply Real-ESRGAN 4x upscaling (requires postprocess extras)
+        upscale: Apply Real-ESRGAN upscaling (requires postprocess extras)
         upscale_factor: Upscale multiplier (default 4)
         restore_fidelity: CodeFormer fidelity weight 0.0-1.0 (default 0.7)
-        batch_size: Frames per inference batch (default 8)
-        use_float16: Use FP16 for inference (default True, saves VRAM, auto-disabled on CPU)
+        use_float16: Use FP16 for inference (default True, saves VRAM)
         device: PyTorch device — "auto" (default), "cuda", "mps", or "cpu"
         model_dir: Custom model directory (default ~/.cache/animated_talker/models)
-        crf: Video quality 0-51 (default 18, visually lossless)
 
     Returns:
         Path to the output video file
@@ -79,58 +81,65 @@ def generate(
 
     logger.info("Using device: %s (float16=%s)", device, use_float16)
 
+    # Validate inputs exist
+    validate_image(image)
+    validate_audio(audio)
+
     output = Path(output)
     model_path = Path(model_dir) if model_dir else get_model_dir()
 
-    # Step 1: Ensure model weights are downloaded
+    # Step 1: Ensure model weights and Ditto repo are available
     logger.info("Checking model weights...")
     ensure_models(model_dir=model_path)
 
-    # Step 2: Load and preprocess inputs
-    logger.info("Loading inputs...")
-    img = load_image(image)
-    face_crop, bbox = detect_face(img, bbox_shift=bbox_shift)
-    audio_wav, duration = load_audio(audio)
-
-    logger.info("Image: %s, Audio: %.2fs", Path(image).name, duration)
-
-    # Step 3: Generate lip-synced frames
-    engine = MuseTalkEngine(
+    # Step 2: Generate video using Ditto engine
+    logger.info("Initializing Ditto engine...")
+    engine = DittoEngine(
         model_dir=model_path,
         device=device,
         use_float16=use_float16,
     )
-    frames = engine.generate_frames(
-        face_crop=face_crop,
-        original_frame=img,
-        bbox=bbox,
-        audio=audio_wav,
+
+    # If post-processing requested, generate to temp path first
+    if face_restore or upscale:
+        import tempfile
+        temp_output = Path(tempfile.mktemp(suffix=".mp4"))
+        target_output = temp_output
+    else:
+        target_output = output
+
+    result = engine.generate_video(
+        image_path=image,
+        audio_path=audio,
+        output_path=target_output,
         fps=fps,
-        batch_size=batch_size,
+        emotion=emotion,
+        sampling_timesteps=sampling_timesteps,
+        fade_in=fade_in,
+        fade_out=fade_out,
     )
 
-    # Step 4: Optional post-processing
+    # Step 3: Optional post-processing
     if face_restore or upscale:
-        from animated_talker.postprocess import restore_frames
+        from animated_talker.postprocess import postprocess_video
 
-        frames = restore_frames(
-            frames,
+        postprocess_video(
+            input_path=temp_output,
+            output_path=output,
+            audio_path=audio,
             face_restore=face_restore,
             upscale=upscale,
             device=device,
             restore_fidelity=restore_fidelity,
             upscale_factor=upscale_factor,
+            fps=fps,
         )
-
-    # Step 5: Encode video with audio
-    logger.info("Encoding video...")
-    result = encode_video(
-        frames=frames,
-        audio_path=audio,
-        output_path=output,
-        fps=fps,
-        crf=crf,
-    )
+        # Clean up temp file
+        try:
+            temp_output.unlink()
+        except OSError:
+            pass
+        result = output
 
     logger.info("Done! Output: %s", result)
     return result
