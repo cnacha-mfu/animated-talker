@@ -1,4 +1,4 @@
-"""Animated Talker — Generate lip-synced talking avatar videos."""
+"""Animated Talker — Generate talking avatar videos with head motion and lip sync."""
 
 from animated_talker.pipeline import generate
 

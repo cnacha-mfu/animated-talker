@@ -9,7 +9,7 @@ import torch
 
 from animated_talker.input_handler import detect_face, load_audio, load_image
 from animated_talker.model_manager import ensure_models, get_model_dir
-from animated_talker.musetalk_engine import MuseTalkEngine
+from animated_talker.sadtalker_engine import SadTalkerEngine
 from animated_talker.video_encoder import encode_video
 
 logger = logging.getLogger(__name__)
@@ -32,20 +32,24 @@ def generate(
     output: str | Path,
     fps: int = 25,
     bbox_shift: int = 0,
+    still_mode: bool = False,
+    expression_scale: float = 1.0,
+    pose_style: int = 0,
     face_restore: bool = False,
     upscale: bool = False,
     upscale_factor: int = 4,
     restore_fidelity: float = 0.7,
-    batch_size: int = 8,
+    batch_size: int = 4,
     use_float16: bool = True,
     device: str = "auto",
     model_dir: str | Path | None = None,
     crf: int = 18,
 ) -> Path:
-    """Generate a lip-synced talking avatar video.
+    """Generate a talking avatar video with head motion and lip sync.
 
-    Takes a portrait image and an audio file, generates lip-synced frames
-    using MuseTalk v1.5, and encodes them into a video with the original audio.
+    Takes a portrait image and an audio file, generates animated frames
+    using SadTalker (CVPR 2023), and encodes them into a video with the
+    original audio.
 
     Args:
         image: Path to portrait image (JPEG/PNG)
@@ -53,11 +57,14 @@ def generate(
         output: Path for output video (MP4)
         fps: Video frame rate (default 25)
         bbox_shift: Jaw boundary adjustment (positive = more chin, default 0)
+        still_mode: Use still-mode mapping for less head motion (default False)
+        expression_scale: Expression intensity multiplier (default 1.0)
+        pose_style: Head motion style index 0-45 (default 0)
         face_restore: Apply CodeFormer face restoration (requires postprocess extras)
         upscale: Apply Real-ESRGAN 4x upscaling (requires postprocess extras)
         upscale_factor: Upscale multiplier (default 4)
         restore_fidelity: CodeFormer fidelity weight 0.0-1.0 (default 0.7)
-        batch_size: Frames per inference batch (default 8)
+        batch_size: Frames per inference batch (default 4)
         use_float16: Use FP16 for inference (default True, saves VRAM, auto-disabled on CPU)
         device: PyTorch device — "auto" (default), "cuda", "mps", or "cpu"
         model_dir: Custom model directory (default ~/.cache/animated_talker/models)
@@ -94,11 +101,14 @@ def generate(
 
     logger.info("Image: %s, Audio: %.2fs", Path(image).name, duration)
 
-    # Step 3: Generate lip-synced frames
-    engine = MuseTalkEngine(
+    # Step 3: Generate animated frames with head motion + lip sync
+    engine = SadTalkerEngine(
         model_dir=model_path,
         device=device,
         use_float16=use_float16,
+        still_mode=still_mode,
+        expression_scale=expression_scale,
+        pose_style=pose_style,
     )
     frames = engine.generate_frames(
         face_crop=face_crop,

@@ -10,7 +10,7 @@ import sys
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="animated-talker",
-        description="Generate lip-synced talking avatar videos from a portrait image and audio file.",
+        description="Generate talking avatar videos with head motion and lip sync from a portrait image and audio file.",
     )
     subparsers = parser.add_subparsers(dest="command")
 
@@ -47,6 +47,23 @@ def main(argv: list[str] | None = None) -> None:
         help="Jaw boundary shift in pixels (default: 0)",
     )
     gen.add_argument(
+        "--still-mode",
+        action="store_true",
+        help="Use still-mode mapping for less head motion",
+    )
+    gen.add_argument(
+        "--expression-scale",
+        type=float,
+        default=1.0,
+        help="Expression intensity multiplier (default: 1.0)",
+    )
+    gen.add_argument(
+        "--pose-style",
+        type=int,
+        default=0,
+        help="Head motion style index 0-45 (default: 0)",
+    )
+    gen.add_argument(
         "--face-restore",
         action="store_true",
         help="Apply CodeFormer face restoration",
@@ -71,8 +88,8 @@ def main(argv: list[str] | None = None) -> None:
     gen.add_argument(
         "--batch-size",
         type=int,
-        default=8,
-        help="Frames per inference batch (default: 8)",
+        default=4,
+        help="Frames per inference batch (default: 4)",
     )
     gen.add_argument(
         "--no-float16",
@@ -152,6 +169,9 @@ def main(argv: list[str] | None = None) -> None:
             output=args.output,
             fps=args.fps,
             bbox_shift=args.bbox_shift,
+            still_mode=args.still_mode,
+            expression_scale=args.expression_scale,
+            pose_style=args.pose_style,
             face_restore=args.face_restore,
             upscale=args.upscale,
             upscale_factor=args.upscale_factor,

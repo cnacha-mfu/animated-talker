@@ -1,11 +1,11 @@
 # Animated Talker
 
-Generate lip-synced talking avatar videos from a single portrait image and an audio file.
+Generate talking avatar videos with natural head motion and lip sync from a single portrait image and an audio file.
 
 **Input:** Avatar image (JPEG/PNG) + Audio file (MP3/WAV)
-**Output:** Lip-synced video (MP4)
+**Output:** Talking-head video with head movement and lip sync (MP4)
 
-Powered by [MuseTalk v1.5](https://github.com/TMElyralab/MuseTalk) for real-time lip-sync generation.
+Powered by [SadTalker](https://github.com/OpenTalker/SadTalker) (CVPR 2023) for audio-driven 3D face animation.
 
 ## Quick Start
 
@@ -43,7 +43,7 @@ With optional post-processing (face restoration + upscaling):
 pip install -e ".[postprocess]"
 ```
 
-### Download model weights (~2.5 GB)
+### Download model weights (~1.5 GB)
 
 ```bash
 animated-talker download-models
@@ -54,41 +54,56 @@ animated-talker download-models
 ### Basic generation
 
 ```bash
-animated-talker generate ^
-    --image avatar.png ^
-    --audio speech.mp3 ^
+animated-talker generate \
+    --image avatar.png \
+    --audio speech.mp3 \
     --output result.mp4
+```
+
+### With head motion control
+
+```bash
+animated-talker generate \
+    --image avatar.png \
+    --audio speech.mp3 \
+    --output result.mp4 \
+    --still-mode \
+    --expression-scale 1.2 \
+    --pose-style 5
 ```
 
 ### With post-processing
 
 ```bash
-animated-talker generate ^
-    --image avatar.png ^
-    --audio speech.mp3 ^
-    --output result.mp4 ^
-    --face-restore ^
+animated-talker generate \
+    --image avatar.png \
+    --audio speech.mp3 \
+    --output result.mp4 \
+    --face-restore \
     --upscale
 ```
 
 ### All options
 
 ```
---image, -i         Path to portrait image (JPEG/PNG) [required]
---audio, -a         Path to audio file (MP3/WAV) [required]
---output, -o        Path for output video (MP4) [required]
---fps               Video frame rate (default: 25)
---bbox-shift        Jaw boundary shift in pixels (default: 0)
---face-restore      Apply CodeFormer face restoration
---upscale           Apply Real-ESRGAN 4x upscaling
---upscale-factor    Upscale multiplier (default: 4)
---restore-fidelity  CodeFormer fidelity 0.0-1.0 (default: 0.7)
---batch-size        Frames per inference batch (default: 8)
---no-float16        Disable FP16 inference (use FP32)
---device            PyTorch device: auto, cuda, mps, cpu (default: auto)
---model-dir         Custom model directory
---crf               Video quality 0-51, lower is better (default: 18)
---verbose, -v       Enable verbose logging
+--image, -i           Path to portrait image (JPEG/PNG) [required]
+--audio, -a           Path to audio file (MP3/WAV) [required]
+--output, -o          Path for output video (MP4) [required]
+--fps                 Video frame rate (default: 25)
+--bbox-shift          Jaw boundary shift in pixels (default: 0)
+--still-mode          Use still-mode mapping for less head motion
+--expression-scale    Expression intensity multiplier (default: 1.0)
+--pose-style          Head motion style index 0-45 (default: 0)
+--face-restore        Apply CodeFormer face restoration
+--upscale             Apply Real-ESRGAN 4x upscaling
+--upscale-factor      Upscale multiplier (default: 4)
+--restore-fidelity    CodeFormer fidelity 0.0-1.0 (default: 0.7)
+--batch-size          Frames per inference batch (default: 4)
+--no-float16          Disable FP16 inference (use FP32)
+--device              PyTorch device: auto, cuda, mps, cpu (default: auto)
+--model-dir           Custom model directory
+--crf                 Video quality 0-51, lower is better (default: 18)
+--verbose, -v         Enable verbose logging
 ```
 
 ### Check model status
@@ -229,10 +244,10 @@ gcloud compute instances delete animated-talker-test --zone=us-central1-a
 The tool auto-detects your hardware. On a machine without a GPU, it falls back to CPU automatically:
 
 ```bash
-animated-talker generate ^
-    --image avatar.png ^
-    --audio speech.mp3 ^
-    --output result.mp4 ^
+animated-talker generate \
+    --image avatar.png \
+    --audio speech.mp3 \
+    --output result.mp4 \
     --batch-size 2
 ```
 
@@ -248,10 +263,14 @@ src/animated_talker/
     __init__.py          # Public API: generate()
     pipeline.py          # Orchestrator
     input_handler.py     # Face detection + audio loading
-    musetalk_engine.py   # MuseTalk v1.5 inference
+    sadtalker_engine.py  # SadTalker inference engine
     video_encoder.py     # FFmpeg encoding + audio mux
     postprocess.py       # CodeFormer + Real-ESRGAN (optional)
     model_manager.py     # Model weight downloads
+    _sadtalker/          # Vendored SadTalker network architectures
+        audio_models.py  # Audio2Exp, Audio2Pose networks
+        renderer.py      # KPDetector, Generator, MappingNet
+        animation.py     # Keypoint transformation, rendering loop
 ```
 
 ## License

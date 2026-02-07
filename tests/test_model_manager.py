@@ -37,3 +37,23 @@ def test_verify_models_empty_dir(tmp_path):
     status = verify_models(model_dir=tmp_path)
     assert all(v is False for v in status.values())
     assert len(status) == len(HF_MODELS)
+
+
+def test_sadtalker_model_keys():
+    """Test that SadTalker model keys are present."""
+    expected_keys = {
+        "sadtalker_checkpoint",
+        "mapping_full",
+        "mapping_still",
+        "face_recon",
+        "audio2exp",
+        "audio2pose",
+    }
+    assert set(HF_MODELS.keys()) == expected_keys
+
+
+def test_model_paths_in_sadtalker_subdir():
+    """Test that all model paths are under the sadtalker subdirectory."""
+    for key in HF_MODELS:
+        path = get_model_path(key)
+        assert "sadtalker" in str(path)

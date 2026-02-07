@@ -14,50 +14,40 @@ DEFAULT_MODEL_DIR = Path.home() / ".cache" / "animated_talker" / "models"
 
 # (repo_id, filename, subfolder in local cache)
 HF_MODELS: dict[str, tuple[str, str, str]] = {
-    "musetalk_config": (
-        "TMElyralab/MuseTalk",
-        "musetalkV15/musetalk.json",
-        "musetalk",
+    # SadTalker V0.0.2 consolidated checkpoint (KPDetector + HEEstimator + Generator)
+    "sadtalker_checkpoint": (
+        "vinthony/SadTalker-V002rc",
+        "SadTalker_V0.0.2_256.safetensors",
+        "sadtalker",
     ),
-    "musetalk_unet": (
-        "TMElyralab/MuseTalk",
-        "musetalkV15/unet.pth",
-        "musetalk",
+    # Mapping networks (3DMM coefficients → keypoint parameters)
+    "mapping_full": (
+        "vinthony/SadTalker-V002rc",
+        "mapping_00109-model.pth.tar",
+        "sadtalker",
     ),
-    "sd_vae_config": (
-        "stabilityai/sd-vae-ft-mse",
-        "config.json",
-        "sd-vae-ft-mse",
+    "mapping_still": (
+        "vinthony/SadTalker-V002rc",
+        "mapping_00229-model.pth.tar",
+        "sadtalker",
     ),
-    "sd_vae_weights": (
-        "stabilityai/sd-vae-ft-mse",
-        "diffusion_pytorch_model.safetensors",
-        "sd-vae-ft-mse",
+    # Face reconstruction network (ResNet50 → 3DMM coefficients)
+    "face_recon": (
+        "vinthony/SadTalker",
+        "checkpoints/epoch_20.pth",
+        "sadtalker",
     ),
-    "whisper_tiny": (
-        "openai/whisper-tiny",
-        "model.safetensors",
-        "whisper-tiny",
+    # Audio-to-expression (ExpNet)
+    "audio2exp": (
+        "vinthony/SadTalker",
+        "checkpoints/auido2exp_00300-model.pth",
+        "sadtalker",
     ),
-    "whisper_config": (
-        "openai/whisper-tiny",
-        "config.json",
-        "whisper-tiny",
-    ),
-    "whisper_preprocessor": (
-        "openai/whisper-tiny",
-        "preprocessor_config.json",
-        "whisper-tiny",
-    ),
-    "face_parse_bisenet": (
-        "ManyOtherFunctions/face-parse-bisent",
-        "79999_iter.pth",
-        "face-parse-bisenet",
-    ),
-    "face_parse_resnet": (
-        "ManyOtherFunctions/face-parse-bisent",
-        "resnet18-5c106cde.pth",
-        "face-parse-bisenet",
+    # Audio-to-pose (PoseVAE)
+    "audio2pose": (
+        "vinthony/SadTalker",
+        "checkpoints/auido2pose_00140-model.pth",
+        "sadtalker",
     ),
 }
 

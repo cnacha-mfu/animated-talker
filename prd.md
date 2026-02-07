@@ -1,20 +1,20 @@
-# PRD: Animated Talker — Lip-Sync Talking Avatar Video Generator
+# PRD: Animated Talker — Talking Avatar Video Generator
 
-**Version:** 2.0
-**Date:** 2026-02-06
+**Version:** 3.0
+**Date:** 2026-02-07
 **Status:** Draft
 
 ---
 
 ## 1. Executive Summary
 
-Animated Talker is a Python library and CLI tool that generates lip-synced talking avatar videos from a single portrait image and an audio file (MP3/WAV). The system uses MuseTalk v1.5 for lip-sync generation with optional post-processing for quality enhancement. Fully self-hosted and open-source.
+Animated Talker is a Python library and CLI tool that generates talking avatar videos with natural head motion and lip sync from a single portrait image and an audio file (MP3/WAV). The system uses SadTalker (CVPR 2023) for audio-driven 3D face animation with optional post-processing for quality enhancement. Fully self-hosted and open-source.
 
 ---
 
 ## 2. Problem Statement
 
-Creating talking-head videos from a still portrait and audio requires stitching together multiple ML models (face detection, lip sync, video encoding) with significant glue code. There is no simple, production-ready Python tool that takes an image + audio and outputs a lip-synced video in one call.
+Creating talking-head videos from a still portrait and audio requires stitching together multiple ML models (face reconstruction, audio-to-expression, audio-to-pose, face rendering, video encoding) with significant glue code. There is no simple, production-ready Python tool that takes an image + audio and outputs a talking-head video with head motion in one call.
 
 ---
 
@@ -24,8 +24,8 @@ Creating talking-head videos from a still portrait and audio requires stitching 
 
 | # | Goal |
 |---|------|
-| G1 | Single image + audio → lip-synced video in one function call |
-| G2 | Accurate lip sync using MuseTalk v1.5 |
+| G1 | Single image + audio -> talking-head video with head motion in one function call |
+| G2 | Natural head movement and accurate lip sync using SadTalker (CVPR 2023) |
 | G3 | Optional face restoration (CodeFormer) and upscaling (Real-ESRGAN) |
 | G4 | Simple Python API: `generate(image, audio, output)` |
 | G5 | CLI for non-developers |
@@ -34,7 +34,7 @@ Creating talking-head videos from a still portrait and audio requires stitching 
 
 ### Non-Goals
 
-- Text-to-speech (TTS) — user provides audio
+- Text-to-speech (TTS) -- user provides audio
 - Voice cloning
 - Real-time streaming
 - Web UI
@@ -48,25 +48,34 @@ Creating talking-head videos from a still portrait and audio requires stitching 
 
 ```
 avatar.png + speech.mp3
-        │
-        ▼
-  ┌─────────────┐
-  │ Input Handler│  Face detection, alignment, audio loading
-  └──────┬──────┘
-         ▼
-  ┌─────────────┐
-  │  MuseTalk   │  Audio features → lip-synced frames
-  │  v1.5       │  (single-step latent inpainting)
-  └──────┬──────┘
-         ▼
-  ┌─────────────┐
-  │ Post-Process│  (optional) CodeFormer + Real-ESRGAN
-  └──────┬──────┘
-         ▼
-  ┌─────────────┐
-  │ Video Encode│  FFmpeg H.264 + audio mux
-  └──────┬──────┘
-         ▼
+        |
+        v
+  +---------------+
+  | Input Handler  |  Face detection, alignment, audio loading
+  +-------+-------+
+          v
+  +---------------+
+  | Face Recon     |  ResNet50 -> 257-dim 3DMM coefficients
+  +-------+-------+
+          v
+  +---------------+
+  | Audio2Exp      |  Mel spectrogram -> expression deltas (64-dim)
+  | Audio2Pose     |  Mel spectrogram -> head pose sequence (6-DOF)
+  +-------+-------+
+          v
+  +---------------+
+  | Face Renderer  |  face-vid2vid: KPDetector + MappingNet + Generator
+  | (SadTalker)    |  3DMM coefficients -> animated face frames
+  +-------+-------+
+          v
+  +---------------+
+  | Post-Process   |  (optional) CodeFormer + Real-ESRGAN
+  +-------+-------+
+          v
+  +---------------+
+  | Video Encode   |  FFmpeg H.264 + audio mux
+  +-------+-------+
+          v
     output.mp4
 ```
 
@@ -88,17 +97,19 @@ generate(
     audio="speech.mp3",
     output="result.mp4",
     fps=25,
-    face_restore=True,      # CodeFormer
+    still_mode=True,         # Less head motion
+    expression_scale=1.2,    # More expressive
+    pose_style=5,            # Head motion style
+    face_restore=True,       # CodeFormer
     upscale=True,            # Real-ESRGAN 4x
-    bbox_shift=0,            # Jaw boundary adjustment
 )
 ```
 
 ### CLI
 
 ```bash
-animated-talker --image avatar.png --audio speech.mp3 --output result.mp4
-animated-talker --image avatar.png --audio speech.mp3 --output result.mp4 --face-restore --upscale
+animated-talker generate --image avatar.png --audio speech.mp3 --output result.mp4
+animated-talker generate --image avatar.png --audio speech.mp3 --output result.mp4 --still-mode --expression-scale 1.2
 animated-talker download-models  # Pre-download all weights
 ```
 
@@ -117,19 +128,21 @@ animated-talker download-models  # Pre-download all weights
 
 | Dependency | Purpose |
 |------------|---------|
-| Python ≥ 3.10 | Runtime |
-| PyTorch ≥ 2.0 | Model inference |
-| CUDA ≥ 11.8 | GPU acceleration |
-| FFmpeg ≥ 5.0 | Video encoding |
+| Python >= 3.10 | Runtime |
+| PyTorch >= 2.0 | Model inference |
+| CUDA >= 11.8 | GPU acceleration |
+| FFmpeg >= 5.0 | Video encoding |
 
-### Model Weights (~2.5 GB)
+### Model Weights (~1.5 GB)
 
-| Model | Size | License |
-|-------|------|---------|
-| MuseTalk v1.5 (UNet + config) | ~900 MB | MIT |
-| SD VAE (ft-mse) | ~330 MB | MIT |
-| Whisper tiny | ~150 MB | MIT |
-| Face parsing (BiSeNet) | ~50 MB | MIT |
+| Model | Size | Source |
+|-------|------|--------|
+| SadTalker V0.0.2 (KPDetector + HEEstimator + Generator) | ~725 MB | vinthony/SadTalker-V002rc |
+| MappingNet (full motion) | ~156 MB | vinthony/SadTalker-V002rc |
+| MappingNet (still mode) | ~156 MB | vinthony/SadTalker-V002rc |
+| Face reconstruction (epoch_20) | ~289 MB | vinthony/SadTalker |
+| Audio2Exp | ~34 MB | vinthony/SadTalker |
+| Audio2Pose | ~96 MB | vinthony/SadTalker |
 | CodeFormer (optional) | ~350 MB | Apache 2.0 |
 | Real-ESRGAN (optional) | ~64 MB | BSD-3 |
 
@@ -139,24 +152,29 @@ animated-talker download-models  # Pre-download all weights
 
 ```
 animated-talker/
-├── pyproject.toml
-├── src/animated_talker/
-│   ├── __init__.py          # Public API
-│   ├── pipeline.py          # Orchestrator
-│   ├── input_handler.py     # Image + audio loading, face detection
-│   ├── musetalk_engine.py   # MuseTalk v1.5 inference
-│   ├── video_encoder.py     # FFmpeg encoding + audio mux
-│   ├── postprocess.py       # CodeFormer + Real-ESRGAN
-│   └── model_manager.py     # Model weight downloads
-├── tests/
-│   ├── test_input_handler.py
-│   ├── test_video_encoder.py
-│   └── test_pipeline.py
-└── cli.py                   # CLI entry point
++-- pyproject.toml
++-- src/animated_talker/
+|   +-- __init__.py          # Public API
+|   +-- pipeline.py          # Orchestrator
+|   +-- input_handler.py     # Image + audio loading, face detection
+|   +-- sadtalker_engine.py  # SadTalker inference engine
+|   +-- video_encoder.py     # FFmpeg encoding + audio mux
+|   +-- postprocess.py       # CodeFormer + Real-ESRGAN
+|   +-- model_manager.py     # Model weight downloads
+|   +-- _sadtalker/          # Vendored network architectures
+|       +-- audio_models.py  # Audio2Exp, Audio2Pose, CVAE
+|       +-- renderer.py      # KPDetector, Generator, MappingNet
+|       +-- animation.py     # Keypoint transformation
++-- tests/
+|   +-- test_input_handler.py
+|   +-- test_video_encoder.py
+|   +-- test_model_manager.py
+|   +-- test_pipeline.py
++-- cli.py                   # CLI entry point
 ```
 
 ---
 
 ## 8. Licensing
 
-MIT License for the library. Default models (MuseTalk, SD VAE, Whisper, CodeFormer, Real-ESRGAN) are all permissively licensed for commercial use.
+MIT License for the library. SadTalker models are released under MIT license for research use.
