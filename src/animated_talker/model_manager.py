@@ -14,53 +14,56 @@ DEFAULT_MODEL_DIR = Path.home() / ".cache" / "animated_talker" / "models"
 DITTO_REPO_URL = "https://github.com/antgroup/ditto-talkinghead.git"
 DITTO_HF_REPO = "digital-avatar/ditto-talkinghead"
 
-# Ditto PyTorch model files to download from HuggingFace
-# (HF filename relative to repo root, local subfolder)
+# Ditto model files to download from HuggingFace.
+# (HF filename relative to repo root, local path relative to model_dir)
+# Local paths preserve the HF directory structure so Ditto's config
+# can locate files using its expected data_root layout.
 DITTO_MODELS: dict[str, tuple[str, str]] = {
+    # PyTorch model weights (under ditto_pytorch/models/)
     "appearance_extractor": (
-        "ditto_pytorch/appearance_extractor.pth",
-        "ditto_pytorch",
+        "ditto_pytorch/models/appearance_extractor.pth",
+        "ditto_pytorch/models",
     ),
     "decoder": (
-        "ditto_pytorch/decoder.pth",
-        "ditto_pytorch",
+        "ditto_pytorch/models/decoder.pth",
+        "ditto_pytorch/models",
     ),
     "lmdm": (
-        "ditto_pytorch/lmdm_v0.4_hubert.pth",
-        "ditto_pytorch",
+        "ditto_pytorch/models/lmdm_v0.4_hubert.pth",
+        "ditto_pytorch/models",
     ),
     "motion_extractor": (
-        "ditto_pytorch/motion_extractor.pth",
-        "ditto_pytorch",
+        "ditto_pytorch/models/motion_extractor.pth",
+        "ditto_pytorch/models",
     ),
     "stitch_network": (
-        "ditto_pytorch/stitch_network.pth",
-        "ditto_pytorch",
+        "ditto_pytorch/models/stitch_network.pth",
+        "ditto_pytorch/models",
     ),
     "warp_network": (
-        "ditto_pytorch/warp_network.pth",
-        "ditto_pytorch",
+        "ditto_pytorch/models/warp_network.pth",
+        "ditto_pytorch/models",
     ),
-    # ONNX models for audio and face detection
+    # Auxiliary ONNX models for audio and face detection
     "hubert_onnx": (
-        "ditto_onnx/hubert_streaming_fix_kv.onnx",
-        "ditto_onnx",
+        "ditto_pytorch/aux_models/hubert_streaming_fix_kv.onnx",
+        "ditto_pytorch/aux_models",
     ),
     "face_det_10g": (
-        "ditto_onnx/det_10g.onnx",
-        "ditto_onnx",
+        "ditto_pytorch/aux_models/det_10g.onnx",
+        "ditto_pytorch/aux_models",
     ),
     "face_2d106det": (
-        "ditto_onnx/2d106det.onnx",
-        "ditto_onnx",
+        "ditto_pytorch/aux_models/2d106det.onnx",
+        "ditto_pytorch/aux_models",
     ),
     "face_landmarker": (
-        "ditto_onnx/face_landmarker.task",
-        "ditto_onnx",
+        "ditto_pytorch/aux_models/face_landmarker.task",
+        "ditto_pytorch/aux_models",
     ),
     "landmark203": (
-        "ditto_onnx/landmark203.onnx",
-        "ditto_onnx",
+        "ditto_pytorch/aux_models/landmark203.onnx",
+        "ditto_pytorch/aux_models",
     ),
     # Config
     "cfg_pytorch": (
@@ -135,25 +138,22 @@ def download_model(model_key: str, model_dir: Path | None = None) -> Path:
         logger.debug("Model %s already exists at %s", model_key, local_path)
         return local_path
 
-    hf_filename, subfolder = DITTO_MODELS[model_key]
+    hf_filename, _subfolder = DITTO_MODELS[model_key]
     local_path.parent.mkdir(parents=True, exist_ok=True)
 
     logger.info("Downloading %s from %s ...", model_key, DITTO_HF_REPO)
+
+    # Download directly into model_dir preserving the HF directory structure.
+    # hf_hub_download with local_dir places the file at local_dir/hf_filename,
+    # which matches our expected layout (e.g. model_dir/ditto_pytorch/models/xxx.pth).
     downloaded = hf_hub_download(
         repo_id=DITTO_HF_REPO,
         filename=hf_filename,
-        local_dir=model_dir / "_hf_download",
-        local_dir_use_symlinks=False,
+        local_dir=str(model_dir),
     )
 
-    # Move to our expected location
-    downloaded_path = Path(downloaded)
-    if downloaded_path != local_path and downloaded_path.exists():
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(downloaded_path), str(local_path))
-
-    logger.info("Downloaded %s to %s", model_key, local_path)
-    return local_path
+    logger.info("Downloaded %s to %s", model_key, downloaded)
+    return Path(downloaded)
 
 
 def ensure_models(
