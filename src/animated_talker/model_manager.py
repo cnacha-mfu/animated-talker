@@ -87,7 +87,6 @@ def download_model(model_key: str, model_dir: Path | None = None) -> Path:
         repo_id=repo_id,
         filename=filename,
         local_dir=model_dir / subfolder,
-        local_dir_use_symlinks=False,
     )
 
     # hf_hub_download may place the file in a nested path matching the repo structure.
