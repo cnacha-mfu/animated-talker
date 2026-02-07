@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "animated-talker"
-version = "0.1.0"
-description = "Generate lip-synced talking avatar videos from a portrait image and audio file"
+version = "0.2.0"
+description = "Generate talking-head videos with lip-sync and head motion from a portrait image and audio file"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10,<3.13"
 authors = [{ name = "Animated Talker Contributors" }]
-keywords = ["lip-sync", "talking-head", "avatar", "video-generation", "musetalk"]
+keywords = ["lip-sync", "talking-head", "avatar", "video-generation", "sadtalker"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -24,10 +24,9 @@ classifiers = [
 ]
 
 dependencies = [
+    # Core (shared by all engines)
     "torch>=2.0",
     "torchvision>=0.15",
-    "diffusers>=0.25",
-    "transformers>=4.36",
     "opencv-python>=4.9",
     "numpy>=1.23",
     "librosa>=0.10",
@@ -35,9 +34,25 @@ dependencies = [
     "huggingface-hub>=0.20",
     "face-alignment>=1.4",
     "tqdm>=4.60",
+    "soundfile>=0.12",
+    # SadTalker engine dependencies
+    "kornia>=0.6",
+    "scipy>=1.10",
+    "scikit-image>=0.19",
+    "facexlib>=0.3",
+    "yacs>=0.1.8",
+    "pyyaml",
+    "imageio>=2.19",
+    "imageio-ffmpeg>=0.4",
+    "safetensors",
 ]
 
 [project.optional-dependencies]
+# MuseTalk engine requires diffusers/transformers (heavier deps)
+musetalk = [
+    "diffusers>=0.25",
+    "transformers>=4.36",
+]
 postprocess = [
     "basicsr>=1.4",
     "realesrgan>=0.3",

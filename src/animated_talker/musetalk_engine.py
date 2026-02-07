@@ -4,6 +4,9 @@ This module vendors the core inference logic from MuseTalk, wrapping the
 VAE, UNet, Whisper feature extraction, and face compositing into a single
 class that takes a face crop + audio and produces lip-synced frames.
 
+NOTE: MuseTalk produces lip-sync only — no head motion.  For head motion
+use the SadTalker engine instead.
+
 Reference: https://github.com/TMElyralab/MuseTalk
 """
 
@@ -22,6 +25,8 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import WhisperModel, WhisperProcessor
 
+from animated_talker.engine import TalkingHeadEngine
+from animated_talker.input_handler import detect_face
 from animated_talker.model_manager import get_model_dir, get_model_path
 
 logger = logging.getLogger(__name__)
@@ -119,11 +124,15 @@ class FaceParser:
         return mask
 
 
-class MuseTalkEngine:
+class MuseTalkEngine(TalkingHeadEngine):
     """MuseTalk v1.5 inference engine for lip-sync frame generation.
 
     Loads the VAE, UNet, Whisper model, and face parser, then generates
-    lip-synced frames from a face crop and audio waveform.
+    lip-synced frames from a portrait image and audio waveform.
+
+    NOTE: This engine only animates the mouth region.  The head stays
+    static because it composites generated mouth pixels onto the
+    original frame using an alpha mask.
     """
 
     def __init__(
@@ -131,10 +140,12 @@ class MuseTalkEngine:
         model_dir: str | Path | None = None,
         device: str = "cuda",
         use_float16: bool = True,
+        bbox_shift: int = 0,
     ):
         self.device = device
         self.dtype = torch.float16 if use_float16 and device != "cpu" else torch.float32
         self.model_dir = Path(model_dir) if model_dir else get_model_dir()
+        self.bbox_shift = bbox_shift
 
         self._load_models()
 
@@ -259,26 +270,31 @@ class MuseTalkEngine:
     @torch.no_grad()
     def generate_frames(
         self,
-        face_crop: np.ndarray,
-        original_frame: np.ndarray,
-        bbox: tuple[int, int, int, int],
+        image: np.ndarray,
         audio: np.ndarray,
         fps: int = 25,
-        batch_size: int = 8,
+        **kwargs,
     ) -> list[np.ndarray]:
-        """Generate lip-synced frames from a face crop and audio.
+        """Generate lip-synced frames (mouth only — head stays static).
 
         Args:
-            face_crop: 256x256 BGR face crop
-            original_frame: Full-resolution BGR original image
-            bbox: (x1, y1, x2, y2) bounding box of face in original
-            audio: Float32 mono waveform at 16kHz
-            fps: Target video frame rate
-            batch_size: Number of frames to process together
+            image: Full-resolution BGR portrait image.
+            audio: Float32 mono waveform at 16 kHz.
+            fps: Target video frame rate.
+
+        Keyword Args:
+            bbox_shift: Jaw boundary adjustment (default: instance default).
+            batch_size: Frames per inference batch (default 8).
 
         Returns:
-            List of full-resolution BGR frames with lip-synced face composited
+            List of full-resolution BGR frames with lip-synced mouth.
         """
+        bbox_shift = kwargs.get("bbox_shift", self.bbox_shift)
+        batch_size = kwargs.get("batch_size", 8)
+
+        # Detect face in the source image
+        face_crop, bbox = detect_face(image, bbox_shift=bbox_shift)
+
         duration = len(audio) / 16000
         num_frames = int(duration * fps)
 
@@ -355,7 +371,7 @@ class MuseTalkEngine:
         crop_h, crop_w = y2 - y1, x2 - x1
 
         for gen_crop in generated_crops:
-            frame = original_frame.copy()
+            frame = image.copy()
 
             # Resize generated crop to match original bbox size
             gen_resized = cv2.resize(gen_crop, (crop_w, crop_h), interpolation=cv2.INTER_LANCZOS4)
